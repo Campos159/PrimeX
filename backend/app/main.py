@@ -60,7 +60,8 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
         existing_user = crud.get_user_by_email(db, user.email)
         if existing_user:
             return JSONResponse(status_code=400, content={"detail": "Usuário já existe"})
-
+        print("DEBUG password repr:", repr(user.password))
+        print("DEBUG password bytes:", len(user.password.encode("utf-8")))
         new_user = crud.create_user(db, user)
         return JSONResponse(status_code=200, content={
             "id": new_user.id,

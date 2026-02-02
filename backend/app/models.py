@@ -8,7 +8,7 @@ class User(Base):
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String, unique=True, index=True)  # Substituindo username por nome
+    nome = Column(String, unique=False, index=True)  # Substituindo username por nome
     email = Column(String, unique=True, index=True)
     password = Column(String, nullable=False)
     is_subscribed = Column(Boolean, default=False)
