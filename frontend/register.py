@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtCore import Qt
+from api_config import API_BASE
 
 from login import LoginWindow
 
@@ -176,7 +177,7 @@ class RegisterWindow(QWidget):
 
         try:
             r = requests.post(
-                "http://127.0.0.1:8000/register",
+                f"{API_BASE}/register",
                 json={
                     "nome": nome,
                     "email": email,

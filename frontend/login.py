@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtCore import Qt
+from api_config import API_BASE
 
 from explore_page import MainWindow
 
@@ -166,7 +167,7 @@ class LoginWindow(QWidget):
 
         try:
             r = requests.post(
-                "http://127.0.0.1:8000/login",
+                f"{API_BASE}/login",
                 json={"email": email, "password": senha}
             )
 

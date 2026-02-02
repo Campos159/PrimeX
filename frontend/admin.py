@@ -19,6 +19,7 @@ from PyQt6.QtGui import QFontDatabase, QFont
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from navbar import NavBar
+from api_config import API_BASE
 
 
 
@@ -29,7 +30,7 @@ class LoadTokensThread(QThread):
     def run(self):
         try:
             response = requests.get(
-                "http://127.0.0.1:8000/admin/listar_tokens",
+                f"{API_BASE}/admin/listar_tokens",
                 timeout=10
             )
 
@@ -300,7 +301,7 @@ class AdminPage(QWidget):
 
         try:
             response = requests.post(
-                "http://127.0.0.1:8000/admin/criar_token",
+                f"{API_BASE}/admin/criar_token",
                 json={"type": token_type},  # backend criando 10 fixo
                 timeout=10
             )
@@ -435,7 +436,7 @@ class AdminPage(QWidget):
 
         try:
             response = requests.post(
-                "http://127.0.0.1:8000/admin/criar_token",
+                f"{API_BASE}/admin/criar_token",
                 json={"type": token_type}
             )
             print("HEADER X-Gameprime-Endpoint:", response.headers.get("X-Gameprime-Endpoint"))
@@ -517,7 +518,7 @@ class AdminPage(QWidget):
         }
 
         try:
-            response = requests.post("http://127.0.0.1:8000/admin/adicionar_jogo", json=data)
+            response = requests.post(f"{API_BASE}/admin/adicionar_jogo", json=data)
             if response.status_code == 200:
                 QMessageBox.information(self, "Sucesso", "Jogo adicionado com sucesso!")
                 self.game_name.clear()
@@ -550,7 +551,7 @@ class AdminPage(QWidget):
 
     def load_games(self):
         try:
-            response = requests.get("http://127.0.0.1:8000/admin/listar_jogos")
+            response = requests.get(f"{API_BASE}/admin/listar_jogos")
             if response.status_code == 200:
                 # limpar lista
                 while self.games_list.count():
@@ -592,7 +593,7 @@ class AdminPage(QWidget):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             try:
-                response = requests.delete(f"http://127.0.0.1:8000/admin/deletar_jogo/{jogo_id}")
+                response = requests.delete(f"{API_BASE}/admin/deletar_jogo/{jogo_id}")
                 if response.status_code == 200:
                     QMessageBox.information(self, "Sucesso", "Jogo deletado com sucesso")
                     self.load_games()
@@ -631,7 +632,7 @@ class AdminPage(QWidget):
         def salvar():
             try:
                 response = requests.put(
-                    f"http://127.0.0.1:8000/admin/editar_jogo/{jogo['id']}",
+                    f"{API_BASE}/admin/editar_jogo/{jogo['id']}",
                     json={
                         "nome": nome_input.text(),
                         "descricao": desc_input.toPlainText(),

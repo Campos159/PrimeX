@@ -2,27 +2,7 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from app import models, schemas
 
-import hashlib
-
-pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
-
-
-def _prehash_password(password: str) -> str:
-    """
-    bcrypt só usa os primeiros 72 BYTES da senha.
-    Para aceitar qualquer tamanho (e evitar erro/colisão), fazemos um pré-hash SHA-256.
-    """
-    if password is None:
-        password = ""
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(_prehash_password(password))
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(_prehash_password(plain_password), hashed_password)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def get_user_by_email(db: Session, email: str):
@@ -30,7 +10,8 @@ def get_user_by_email(db: Session, email: str):
 
 
 def create_user(db: Session, user: schemas.UserCreate):
-    hashed_password = hash_password(user.password)
+    # schemas.py já validou <= 72 bytes, então aqui não explode.
+    hashed_password = pwd_context.hash(user.password)
 
     db_user = models.User(
         nome=user.nome,
@@ -42,6 +23,14 @@ def create_user(db: Session, user: schemas.UserCreate):
     db.commit()
     db.refresh(db_user)
     return db_user
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        # Se chegar aqui, evita estourar 500 e devolve "senha inválida" no login.
+        return False
 
 
 def authenticate_user(db: Session, email: str, password: str):

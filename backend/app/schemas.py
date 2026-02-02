@@ -1,5 +1,9 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, field_validator
 from datetime import datetime
+
+
+def _password_len_bytes(p: str) -> int:
+    return len((p or "").encode("utf-8"))
 
 
 # ================================
@@ -8,7 +12,17 @@ from datetime import datetime
 class UserCreate(BaseModel):
     nome: str
     email: EmailStr
-    password: str = Field(min_length=6, max_length=256)  # pode ser maior agora
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_max_72_bytes(cls, v: str):
+        if _password_len_bytes(v) > 72:
+            raise ValueError(
+                "Senha muito longa. O limite é 72 bytes (bcrypt). "
+                "Use uma senha menor (evite textos longos, emojis e muitos acentos)."
+            )
+        return v
 
 
 # ================================
@@ -30,7 +44,17 @@ class UserResponse(BaseModel):
 # ================================
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1, max_length=256)
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_max_72_bytes(cls, v: str):
+        if _password_len_bytes(v) > 72:
+            raise ValueError(
+                "Senha muito longa. O limite é 72 bytes (bcrypt). "
+                "Use uma senha menor."
+            )
+        return v
 
 
 # ================================
@@ -47,15 +71,6 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
-# ================================
-# Token para autenticação
-# ================================
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
-
-
-# (Opcional) Se você ainda usa esse schema em algum lugar:
-class Login(BaseModel):
-    email: str
-    password: str

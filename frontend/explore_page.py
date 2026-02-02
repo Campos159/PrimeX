@@ -13,6 +13,7 @@ from navbar import NavBar
 from downloader import baixar_jogo
 from filter_bar import FilterBar
 from PyQt6.QtGui import QFontDatabase
+from api_config import API_BASE
 
 
 
@@ -305,7 +306,7 @@ QPushButton:hover {
     def load_games(self):
         import requests
         try:
-            response = requests.get("http://127.0.0.1:8000/admin/listar_jogos")
+            response = requests.get(f"{API_BASE}/admin/listar_jogos")
             jogos_data = response.json().get("jogos", [])
         except:
             jogos_data = []

@@ -29,14 +29,13 @@ if BASE_DIR not in sys.path:
 
 # ✅ PRIMEIRA TELA (importa só depois do sys.path pronto)
 from register import RegisterWindow
+from api_config import API_BASE
 
 # ===== Fonte =====
 FONT_PATH = os.path.join(BASE_DIR, "assets", "fonts", "VT323-Regular.ttf")
 
 # ===== Backend =====
-BACKEND_HOST = "127.0.0.1"
-BACKEND_PORT = 8000
-HEALTH_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}/health"
+HEALTH_URL = API_BASE
 
 
 def _is_port_open(host: str, port: int) -> bool:
