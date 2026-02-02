@@ -11,6 +11,7 @@ import traceback
 from app import models, schemas, crud
 from fastapi.responses import JSONResponse
 from fastapi import Body
+from fastapi.middleware.cors import CORSMiddleware
 
 print("✅ CARREGOU app/main.py")
 
@@ -29,6 +30,14 @@ models.Base.metadata.create_all(bind=engine)
 # FASTAPI
 # ================================
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
