@@ -1,13 +1,15 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
+
 
 # ================================
 # Schema para criar usuário
 # ================================
 class UserCreate(BaseModel):
-    nome: str        # antes era username, agora é "nome" conforme o models.py
+    nome: str
     email: EmailStr
-    password: str
+    password: str = Field(min_length=6, max_length=256)  # pode ser maior agora
+
 
 # ================================
 # Schema de resposta ao criar usuário
@@ -19,15 +21,17 @@ class UserResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-class Config:
-    from_attributes = True
+    class Config:
+        from_attributes = True
+
 
 # ================================
 # Schema para login
 # ================================
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=256)
+
 
 # ================================
 # Schema para resposta de login
@@ -39,22 +43,19 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
 
-class Config:
-    from_attributes = True
+    class Config:
+        from_attributes = True
 
-# ================================
-# Configuração para Pydantic usar atributos do ORM
-# ================================
-class Config:
-    from_attributes = True
 
 # ================================
 # Token para autenticação
 # ================================
-class Login(BaseModel):
-    email: str
-    password: str
-
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# (Opcional) Se você ainda usa esse schema em algum lugar:
+class Login(BaseModel):
+    email: str
+    password: str
