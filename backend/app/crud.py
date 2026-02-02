@@ -4,7 +4,7 @@ from app import models, schemas
 
 import hashlib
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 
 
 def _prehash_password(password: str) -> str:
