@@ -2,7 +2,10 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from app import models, schemas
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],  # aceita hashes antigos e novos
+    deprecated="auto"
+)
 
 
 def get_user_by_email(db: Session, email: str):
@@ -10,6 +13,16 @@ def get_user_by_email(db: Session, email: str):
 
 
 def create_user(db: Session, user: schemas.UserCreate):
+
+    pw = user.password
+
+    # DEBUG (temporário)
+    print("DEBUG password type:", type(pw))
+    try:
+        print("DEBUG password bytes len:", len((pw or "").encode("utf-8")))
+        print("DEBUG password repr:", repr(pw))
+    except Exception as e:
+        print("DEBUG error inspecting password:", e)
     # schemas.py já validou <= 72 bytes, então aqui não explode.
     hashed_password = pwd_context.hash(user.password)
 
