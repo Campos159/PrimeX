@@ -164,8 +164,8 @@ class RegisterWindow(QWidget):
     def register_usuario(self):
         nome = self.nome_input.text().strip()
         email = self.email_input.text().strip()
-        senha = self.senha_input.text().strip()
-        confirmar = self.confirmar_senha_input.text().strip()
+        senha = self.senha_input.text()
+        confirmar = self.confirmar_senha_input.text()
 
         if not nome or not email or not senha or not confirmar:
             QMessageBox.warning(self, "Erro", "Preencha todos os campos!")
@@ -175,23 +175,49 @@ class RegisterWindow(QWidget):
             QMessageBox.warning(self, "Erro", "As senhas não coincidem!")
             return
 
+        # (Opcional, mas MUITO recomendado) evita o erro do bcrypt no backend:
+        if len(senha.encode("utf-8")) > 72:
+            QMessageBox.warning(
+                self,
+                "Erro",
+                "Senha muito longa.\n"
+                "O limite é 72 bytes (bcrypt).\n"
+                "Evite emojis e muitos acentos e reduza o tamanho."
+            )
+            return
+
         try:
             r = requests.post(
                 f"{API_BASE}/register",
-                json={
-                    "nome": nome,
-                    "email": email,
-                    "password": senha
-                }
+                json={"nome": nome, "email": email, "password": senha},
+                timeout=10
             )
 
-            data = r.json() if r.headers.get("content-type") else {}
+            data = {}
+            try:
+                data = r.json()
+            except Exception:
+                pass
 
-            if r.status_code == 200:
+            if r.status_code in (200, 201):
                 QMessageBox.information(self, "Sucesso", "Conta criada com sucesso!")
                 self.voltar_login()
-            else:
-                QMessageBox.warning(self, "Erro", data.get("detail", "Erro ao registrar"))
+                return
+
+            # Trata 422 do Pydantic bonitinho
+            if r.status_code == 422:
+                detail = data.get("detail")
+                if isinstance(detail, list) and detail:
+                    # tenta pegar a primeira mensagem
+                    msg = detail[0].get("msg", "Dados inválidos.")
+                else:
+                    msg = "Dados inválidos."
+                QMessageBox.warning(self, "Erro", msg)
+                return
+
+            # Outros erros
+            detail = data.get("detail", "Erro ao registrar")
+            QMessageBox.warning(self, "Erro", str(detail))
 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha na conexão:\n{e}")
