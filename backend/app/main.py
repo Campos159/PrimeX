@@ -160,7 +160,7 @@ class TokenRequest(BaseModel):
 @app.post("/admin/adicionar_jogo")
 def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
     dropbox_token = transformar_link_dropbox(jogo.dropbox_token)
-    novo = Jogo(
+    novo = models.Game(
         nome=jogo.nome,
         descricao=jogo.descricao,
         dropbox_token=dropbox_token,
@@ -173,7 +173,7 @@ def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
 
 @app.get("/admin/listar_jogos")
 def listar_jogos(db: Session = Depends(get_db)):
-    jogos = db.query(Jogo).all()
+    jogos = db.query(models.Game).all()
     return {"jogos": [
         {
             "id": j.id,
@@ -186,7 +186,7 @@ def listar_jogos(db: Session = Depends(get_db)):
 
 @app.put("/admin/editar_jogo/{jogo_id}")
 def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
-    db_jogo = db.query(Jogo).filter(Jogo.id == jogo_id).first()
+    db_jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
     if not db_jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
     db_jogo.nome = jogo.nome
@@ -198,7 +198,7 @@ def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
 
 @app.delete("/admin/deletar_jogo/{jogo_id}")
 def deletar_jogo(jogo_id: int, db: Session = Depends(get_db)):
-    db_jogo = db.query(Jogo).filter(Jogo.id == jogo_id).first()
+    db_jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
     if not db_jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
     db.delete(db_jogo)
@@ -282,7 +282,7 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 # ================================
 @app.get("/jogos/{jogo_id}/download")
 def baixar_jogo(jogo_id: int, db: Session = Depends(get_db)):
-    jogo = db.query(Jogo).filter(Jogo.id == jogo_id).first()
+    jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
     if not jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
 

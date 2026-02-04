@@ -22,10 +22,12 @@ class Game(Base):
     __tablename__ = "jogos"
 
     id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    image_url = Column(String)
-    description = Column(Text)
-    requirements = Column(Text)
+    nome = Column(String, index=True, nullable=False)
+    descricao = Column(Text, default="")
+    dropbox_token = Column(String, nullable=False)
+    capa_url = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 
 class AccessCode(Base):
