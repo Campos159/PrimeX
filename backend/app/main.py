@@ -92,15 +92,7 @@ def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
 
 # ================================
 # MODELOS ADICIONAIS (Jogos e Tokens)
-# ================================
-class Jogo(models.Base):
-    __tablename__ = "jogos"
-    id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String, nullable=False)
-    descricao = Column(Text, nullable=False)
-    dropbox_token = Column(String, nullable=False)
-    capa_url = Column(String, nullable=True)
-
+# ===============================
 
 class TokenDB(models.Base):
     __tablename__ = "tokens"

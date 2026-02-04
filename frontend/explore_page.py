@@ -14,6 +14,8 @@ from downloader import baixar_jogo
 from filter_bar import FilterBar
 from PyQt6.QtGui import QFontDatabase
 from api_config import API_BASE
+import hashlib
+import requests
 
 
 
@@ -158,12 +160,34 @@ class GameCard(QWidget):
     def get_image_data(self, url):
         if not url:
             return b""
+
         try:
-            import requests
-            response = requests.get(url, timeout=5)
-            return response.content
+            # ===== CACHE LOCAL (não ocupa VPS) =====
+            base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+            cache_dir = os.path.join(base_dir, "PrimeX", "cache", "covers")
+            os.makedirs(cache_dir, exist_ok=True)
+
+            # nome do arquivo baseado na URL (evita conflito e não precisa ID)
+            h = hashlib.md5(url.encode("utf-8")).hexdigest()
+            cache_path = os.path.join(cache_dir, f"{h}.img")
+
+            # se já existe, usa do disco
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+                with open(cache_path, "rb") as f:
+                    return f.read()
+
+            # se não existe, baixa e salva
+            response = requests.get(url, timeout=8)
+            response.raise_for_status()
+            data = response.content
+
+            with open(cache_path, "wb") as f:
+                f.write(data)
+
+            return data
+
         except Exception as e:
-            print("Erro ao carregar imagem:", e)
+            print("Erro ao carregar imagem (cache):", e)
             return b""
 
     def install_game(self):
