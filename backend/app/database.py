@@ -1,7 +1,18 @@
+# app/database.py
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = "sqlite:///gameprime.db"
-engine = create_engine(DATABASE_URL, echo=True)
-SessionLocal = sessionmaker(bind=engine)
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # .../backend/app -> .../backend
+DB_PATH = os.path.join(BASE_DIR, "gameprime.db")       # .../backend/gameprime.db
+
+DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()

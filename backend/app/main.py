@@ -19,12 +19,11 @@ print("✅ CARREGOU app/main.py")
 # ================================
 # BANCO DE DADOS (SQLite)
 # ================================
-DATABASE_URL = "sqlite:///./gameprime.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from app.database import SessionLocal, engine  # ✅ usa o mesmo engine/Base do projeto
 
-# Cria todas as tabelas do models.py
+# Cria tabelas UMA vez, no mesmo banco
 models.Base.metadata.create_all(bind=engine)
+
 
 # ================================
 # FASTAPI

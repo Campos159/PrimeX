@@ -511,18 +511,12 @@ class AdminPage(QWidget):
 
     def save_game(self):
         data = {
-            "nome": self.game_name.text().strip(),
-            "descricao": self.game_desc.toPlainText().strip(),
-            "dropbox_token": self.game_dropbox.text().strip(),
-            "capa_url": self.game_cover.text().strip(),
+            "nome": (self.game_name.text() or "").strip(),
+            "descricao": (self.game_desc.toPlainText() or "").strip(),  # nunca None
+            "dropbox_token": (self.game_dropbox.text() or "").strip(),
+            "capa_url": (self.game_cover.text() or "").strip()  # pode ser ""
         }
 
-        # Campos vazios viram None (evita várias exceções no backend)
-        for k in ["descricao", "dropbox_token", "capa_url"]:
-            if data.get(k) == "":
-                data[k] = None
-
-        # Validação mínima no frontend (evita 500 por dado faltando)
         if not data["nome"]:
             QMessageBox.warning(self, "Erro", "Preencha o nome do jogo.")
             return
@@ -538,7 +532,6 @@ class AdminPage(QWidget):
                 timeout=15
             )
 
-            # tenta extrair mensagem do backend
             try:
                 payload = response.json()
             except Exception:
@@ -552,27 +545,11 @@ class AdminPage(QWidget):
                 self.game_cover.clear()
             else:
                 detail = payload.get("detail") or payload.get("message") or payload.get("raw") or str(payload)
-                QMessageBox.warning(
-                    self,
-                    "Erro",
-                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail}"
-                )
+                QMessageBox.warning(self, "Erro",
+                                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail}")
 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
-
-        try:
-            response = requests.post(f"{API_BASE}/admin/adicionar_jogo", json=data)
-            if response.status_code == 200:
-                QMessageBox.information(self, "Sucesso", "Jogo adicionado com sucesso!")
-                self.game_name.clear()
-                self.game_desc.clear()
-                self.game_dropbox.clear()
-                self.game_cover.clear()
-            else:
-                QMessageBox.warning(self, "Erro", f"Não foi possível salvar o jogo ({response.status_code})")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor: {e}")
 
     def create_manage_games_page(self):
         frame = QFrame()
