@@ -61,8 +61,9 @@ class GameCard(QWidget):
 
         # ===== IMAGE =====
         self.image_label = QLabel()
+        self.image_label.setFixedSize(260, 220)  # ✅ agora tá no lugar certo
         self.image_label.setFixedHeight(220)
-        self.image_label.setScaledContents(True)
+        self.image_label.setScaledContents(False)
         self.image_label.setStyleSheet("""
         QLabel {
             border-top-left-radius: 16px;
@@ -70,18 +71,18 @@ class GameCard(QWidget):
         }
         """)
 
-        pixmap = QPixmap()
-        pixmap.loadFromData(self.get_image_data(image_url))
+        self._original_pixmap = QPixmap()
+        data = self.get_image_data(image_url)
+        if data:
+            self._original_pixmap.loadFromData(data)
 
-        if not pixmap.isNull():
-            self.image_label.setPixmap(
-                pixmap.scaled(
-                    self.image_label.size(),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
+        # aplica depois que o layout definir tamanhos
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._apply_cover_pixmap)
 
+
+
+        root.addWidget(self.image_label)
         # ===== TITLE =====
         title = QLabel(self.game_title.upper())
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -161,6 +162,15 @@ class GameCard(QWidget):
         if not url:
             return b""
 
+        if url.startswith("data:image") and "base64," in url:
+            import base64
+            try:
+                b64 = url.split("base64,", 1)[1]
+                return base64.b64decode(b64)
+            except Exception as e:
+                print("Erro ao decodificar imagem base64:", e)
+                return b""
+
         try:
             # ===== CACHE LOCAL (não ocupa VPS) =====
             base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
@@ -189,6 +199,50 @@ class GameCard(QWidget):
         except Exception as e:
             print("Erro ao carregar imagem (cache):", e)
             return b""
+
+    def _apply_cover_pixmap(self):
+        if self._original_pixmap.isNull():
+            return
+
+        target_w = self.image_label.width()
+        target_h = self.image_label.height()
+        if target_w <= 0 or target_h <= 0:
+            return
+
+        # 1) escala "cover"
+        pm = self._original_pixmap.scaled(
+            target_w, target_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        # 2) crop central
+        x = max(0, (pm.width() - target_w) // 2)
+        y = max(0, (pm.height() - target_h) // 2)
+        pm = pm.copy(x, y, target_w, target_h)
+
+        # 3) clip arredondado (só topo)
+        from PyQt6.QtGui import QPainter, QPainterPath
+        from PyQt6.QtCore import QRectF
+
+        out = QPixmap(target_w, target_h)
+        out.fill(Qt.GlobalColor.transparent)
+
+        r = 16.0  # mesmo radius do card
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, target_w, target_h), r, r)
+
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pm)
+        painter.end()
+
+        self.image_label.setPixmap(out)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_cover_pixmap()
 
     def install_game(self):
         QMessageBox.information(

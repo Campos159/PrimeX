@@ -47,6 +47,7 @@ class LoadTokensThread(QThread):
 
 
 class AdminPage(QWidget):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Painel Administrativo - Gameprime")
@@ -304,6 +305,12 @@ class AdminPage(QWidget):
                 f"{API_BASE}/admin/criar_token",
                 json={"type": token_type},  # backend criando 10 fixo
                 timeout=10
+            )
+
+            QMessageBox.information(
+                self,
+                "Debug",
+                f"Enviando type: {token_type}\nStatus: {response.status_code}\n\nResposta:\n{response.text[:800]}"
             )
 
             print("STATUS:", response.status_code)

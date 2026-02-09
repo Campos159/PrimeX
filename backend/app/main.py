@@ -96,7 +96,9 @@ def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
 class TokenDB(models.Base):
     __tablename__ = "tokens"
 
-    token = Column(String, primary_key=True, index=True)
+    token = Column(String(64), primary_key=True, index=True)
+    type = Column(String(20), nullable=False)
+    active = Column(Boolean, default=False, nullable=False)
     type = Column(String, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -243,13 +245,15 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
     print("CRIA_TOKEN ✅ MAIN.PY - type:", request.type)
 
     if request.type not in durations:
-        raise HTTPException(status_code=400, detail="Tipo de plano inválido.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tipo inválido: {request.type}. Aceitos: {list(durations.keys())}"
+        )
 
-    qtd = 10  # 🔒 FIXO
-
+    qtd = 10
     tokens_criados = []
     now = datetime.utcnow()
-    dur = durations.get(request.type)
+    dur = durations[request.type]  # ✅ garante que é timedelta ou None
 
     for _ in range(qtd):
         token_str = str(uuid.uuid4())
@@ -270,8 +274,6 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
         })
 
     db.commit()
-
-    print("RETORNANDO ✅", len(tokens_criados), "tokens")
     return {"tokens": tokens_criados, "count": len(tokens_criados)}
 
 
