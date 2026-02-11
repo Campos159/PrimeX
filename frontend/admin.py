@@ -290,6 +290,9 @@ class AdminPage(QWidget):
 
 
 
+
+
+
     def _make_copy_handler(self, tok: str):
         return lambda: self.copiar_token(tok)
 

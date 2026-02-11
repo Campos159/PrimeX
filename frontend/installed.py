@@ -7,22 +7,25 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap, QFontDatabase
+from PyQt6.QtGui import QFontDatabase
 
 from navbar import NavBar
 from profile import ProfilePage
 from filter_bar import FilterBar
+
+# IMPORTA O GameCard da explore_page (assim o botão "JOGAR" usa a mesma lógica)
 from explore_page import GameCard
 
 
 # =========================
-# PATHS
+# PATHS (MESMO PADRÃO DO explore_page.py)
 # =========================
 BASE_DIR = os.getcwd()
-GAMES_DIR = os.path.join(BASE_DIR, "games")
-JSON_INSTALLED = os.path.join(GAMES_DIR, "instalados.json")
-
 FONT_PATH = os.path.join(BASE_DIR, "assets", "fonts", "VT323-Regular.ttf")
+
+base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+GAMES_DIR = os.path.join(base_dir, "PrimeX", "games")
+JSON_INSTALLED = os.path.join(GAMES_DIR, "instalados.json")
 
 
 # =========================
@@ -91,7 +94,7 @@ class InstaladosPage(QWidget):
         self.main_layout.addWidget(self.nav_bar)
 
         # =========================
-        # FILTER BAR (REUTILIZADO)
+        # FILTER BAR
         # =========================
         self.filter_bar = FilterBar(on_filter_change=self.apply_filters)
         self.filter_bar.setSizePolicy(
@@ -107,7 +110,6 @@ class InstaladosPage(QWidget):
         self.grid_layout = QGridLayout(self.grid_widget)
         self.grid_layout.setSpacing(20)
         self.grid_layout.setContentsMargins(0, 5, 0, 0)
-
         self.main_layout.addWidget(self.grid_widget)
 
         self.cards = []
@@ -142,6 +144,7 @@ class InstaladosPage(QWidget):
     # LOAD INSTALLED GAMES
     # =========================
     def load_installed_games(self):
+        # limpa grid
         for i in reversed(range(self.grid_layout.count())):
             widget = self.grid_layout.itemAt(i).widget()
             if widget:
@@ -153,33 +156,42 @@ class InstaladosPage(QWidget):
         if not os.path.exists(JSON_INSTALLED):
             return
 
+        # Agora: instalados.json é um DICT { "Nome do Jogo": {install_dir, exe} }
         try:
             with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
-                jogos = json.load(f)
-            if not isinstance(jogos, list):
-                jogos = []
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
         except Exception:
-            jogos = []
+            data = {}
 
-        for idx, jogo in enumerate(jogos):
+        # filtra só os que realmente existem no disco
+        jogos = []
+        for game_title, info in data.items():
+            install_dir = (info or {}).get("install_dir", "")
+            if install_dir and os.path.isdir(install_dir):
+                jogos.append(game_title)
+
+        # cria cards
+        for idx, (game_title, info) in enumerate(data.items()):
+            install_dir = (info or {}).get("install_dir", "")
+            if not install_dir or not os.path.isdir(install_dir):
+                continue
+
             card = GameCard(
-                image_url=jogo.get("capa_url", ""),
-                title_top=jogo.get("nome", ""),
+                image_url=(info or {}).get("capa_url", ""),
+                title_top=game_title,
                 title_bottom="",
-                download_url="",  # não usado em instalados
-                genres=jogo.get("genero", [])
+                download_url="",
+                genres=(info or {}).get("genero", [])
             )
-
-            # força estado "JOGAR"
             card.set_playable()
 
             self.cards.append(card)
 
             row = idx // 5
             col = idx % 5
-            self.grid_layout.addWidget(
-                card, row, col, alignment=Qt.AlignmentFlag.AlignTop
-            )
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
 
     # =========================
     # FILTERS
@@ -189,18 +201,13 @@ class InstaladosPage(QWidget):
             search_text, active_genres = self.filter_bar.get_filters()
 
         for card in self.cards:
-            title = card.game_title.lower()
+            title = (card.game_title or "").lower()
             genre_match = True
-
             if active_genres:
                 genre_match = any(g in card.genres for g in active_genres)
-
             card.setVisible(search_text in title and genre_match)
 
 
-# =========================
-# MAIN
-# =========================
 def main():
     os.makedirs(GAMES_DIR, exist_ok=True)
     app = QApplication(sys.argv)

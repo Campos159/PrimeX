@@ -23,8 +23,84 @@ FONT_PATH = os.path.join(os.getcwd(), "assets", "fonts", "VT323-Regular.ttf")
 
 
 # Pastas/arquivos
-GAMES_DIR = os.path.join(os.getcwd(), "games")
+base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+GAMES_DIR = os.path.join(base_dir, "PrimeX", "games")
 JSON_INSTALLED = os.path.join(GAMES_DIR, "instalados.json")
+
+
+def load_installed():
+    if not os.path.exists(JSON_INSTALLED):
+        return {}
+    try:
+        with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_installed(data: dict):
+    os.makedirs(GAMES_DIR, exist_ok=True)
+    with open(JSON_INSTALLED, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def mark_installed(game_title: str, install_dir: str, exe_name: str = "", capa_url: str = "", genero=None):
+    data = load_installed()
+    data[game_title] = {
+        "install_dir": install_dir,
+        "exe": exe_name,
+        "capa_url": capa_url or "",
+        "genero": genero or []
+    }
+    save_installed(data)
+
+
+def find_best_exe(install_dir: str) -> str:
+    """
+    Encontra automaticamente o melhor .exe dentro da pasta do jogo e retorna o CAMINHO RELATIVO.
+    Regras:
+    - ignora uninstall/installer/setup/redistributable
+    - prioriza exe na raiz
+    - prioriza exe maior (geralmente é o jogo)
+    """
+    ignore_keywords = [
+        "unins", "uninstall", "setup", "install", "installer",
+        "dxsetup", "directx", "vcredist", "redist", "redistributable",
+        "crashreport", "launcher", "updater"
+    ]
+
+    candidates = []
+    for root, _, files in os.walk(install_dir):
+        for fn in files:
+            if not fn.lower().endswith(".exe"):
+                continue
+
+            low = fn.lower()
+            if any(k in low for k in ignore_keywords):
+                continue
+
+            full = os.path.join(root, fn)
+
+            try:
+                size = os.path.getsize(full)
+            except Exception:
+                size = 0
+
+            rel = os.path.relpath(full, install_dir)
+
+            # score: exe na raiz ganha bônus
+            depth = rel.count(os.sep)
+            root_bonus = 2 if depth == 0 else 0
+
+            candidates.append((root_bonus, size, rel))
+
+    if not candidates:
+        return ""
+
+    # maior root_bonus, depois maior tamanho
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return candidates[0][2]
+
+
 
 
 # =========================
@@ -200,6 +276,11 @@ class GameCard(QWidget):
             print("Erro ao carregar imagem (cache):", e)
             return b""
 
+    def _set_progress(self, pct: int):
+        pct = max(0, min(100, int(pct)))
+        self.btn_install.setText(f"BAIXANDO... {pct}%")
+        self.btn_install.setEnabled(False)
+
     def _apply_cover_pixmap(self):
         if self._original_pixmap.isNull():
             return
@@ -245,12 +326,73 @@ class GameCard(QWidget):
         self._apply_cover_pixmap()
 
     def install_game(self):
-        QMessageBox.information(
-            self,
-            "Instalação",
-            f"Iniciando download de {self.game_title}"
+        # se já está instalado: jogar
+        if self.is_installed():
+            self.play_game()
+            return
+
+        # UI inicial
+        self.btn_install.setText("BAIXANDO... 0%")
+        self.btn_install.setEnabled(False)
+
+        signals = baixar_jogo(self.game_title, self.download_url, card=self)
+
+        # PROGRESSO
+        signals.progress.connect(self._set_progress)
+
+        # FINALIZOU
+        signals.finished.connect(self._on_install_finished)
+
+        # ERRO
+        def on_error(msg):
+            self.btn_install.setText("INSTALAR")
+            self.btn_install.setEnabled(True)
+            QMessageBox.warning(self, "Erro no download", msg)
+
+        signals.error.connect(on_error)
+
+    def _on_install_finished(self):
+        install_dir = os.path.join(GAMES_DIR, self.game_title)
+
+        mark_installed(
+            self.game_title,
+            install_dir,
+            exe_name="",
+            capa_url=self.image_url,
+            genero=self.genres
         )
-        # aqui você já pode ligar com baixar_jogo depois
+
+        self.set_playable()
+        QMessageBox.information(self, "Sucesso", f"{self.game_title} instalado com sucesso!")
+
+    def play_game(self):
+        data = load_installed()
+        info = data.get(self.game_title) or {}
+        install_dir = info.get("install_dir", "")
+
+        if not install_dir or not os.path.isdir(install_dir):
+            QMessageBox.warning(self, "Erro", "Jogo não encontrado. Reinstale.")
+            self.btn_install.setText("INSTALAR")
+            return
+
+        exe_rel = (info.get("exe") or "").strip()
+
+        # se exe não estiver salvo (ex: jogo antigo), tenta detectar agora
+        if not exe_rel:
+            exe_rel = find_best_exe(install_dir)
+            if exe_rel:
+                mark_installed(self.game_title, install_dir, exe_name=exe_rel)
+
+        if exe_rel:
+            exe_path = os.path.join(install_dir, exe_rel)
+            if os.path.exists(exe_path):
+                os.startfile(exe_path)
+                return
+
+        # fallback: abre a pasta se não conseguir abrir exe
+        QMessageBox.information(self, "Atenção",
+                                "Não consegui localizar o executável automaticamente. Abrindo a pasta.")
+        os.startfile(install_dir)
 
     def show_requirements(self):
         QMessageBox.information(
@@ -259,16 +401,16 @@ class GameCard(QWidget):
             "Requisitos do jogo ainda não definidos."
         )
 
+
+
     def is_installed(self):
-        if not os.path.exists(JSON_INSTALLED):
+        data = load_installed()
+        info = data.get(self.game_title)
+        if not info:
             return False
 
-        try:
-            with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
-                installed = json.load(f)
-            return self.game_title in installed
-        except:
-            return False
+        install_dir = info.get("install_dir", "")
+        return bool(install_dir) and os.path.isdir(install_dir)
 
     def set_playable(self):
         self.btn_install.setText("JOGAR")
@@ -285,6 +427,13 @@ class GameCard(QWidget):
             padding: 10px;
         }
         """)
+
+        try:
+            self.btn_install.clicked.disconnect()
+        except Exception:
+            pass
+        self.btn_install.clicked.connect(self.play_game)
+
 
 # =========================
 # MAIN WINDOW
@@ -402,7 +551,7 @@ QPushButton:hover {
                 image_url=jogo.get("capa_url", ""),
                 title_top=jogo.get("nome", ""),
                 title_bottom="",
-                download_url=f"http://127.0.0.1:8000/jogos/{jogo['id']}/download",
+                download_url=f"{API_BASE}/jogos/{jogo['id']}/download?user_id={self.user_info['id']}",
                 genres=jogo.get("genero", [])  # <<< NOVO: passa gêneros ao card
             )
             self.cards.append(card)

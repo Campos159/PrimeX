@@ -224,6 +224,22 @@ def desbanir_usuario(user_id: int, db: Session = Depends(get_db)):
     return {"message": "Usuário desbanido com sucesso", "id": u.id}
 
 
+def usuario_tem_plano_ativo(user_id: int, db: Session):
+    token = db.query(TokenDB).filter(
+        TokenDB.user_id == user_id,
+        TokenDB.active == True
+    ).order_by(TokenDB.created_at.desc()).first()
+
+    if not token:
+        return False
+
+    # verifica expiração
+    if token.expires_at and token.expires_at < datetime.utcnow():
+        return False
+
+    return True
+
+
 # ================================
 # CONFIGURAÇÕES DO DROPBOX
 # ================================
@@ -375,22 +391,37 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 # ROTAS - DOWNLOAD DE JOGOS
 # ================================
 @app.get("/jogos/{jogo_id}/download")
-def baixar_jogo(jogo_id: int, db: Session = Depends(get_db)):
+def baixar_jogo(
+    jogo_id: int,
+    user_id: int,   # ← obrigatório
+    db: Session = Depends(get_db)
+):
+    # 🔐 valida plano
+    if not usuario_tem_plano_ativo(user_id, db):
+        raise HTTPException(
+            status_code=403,
+            detail="Usuário sem plano ativo"
+        )
+
     jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
     if not jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
 
-    link = jogo.dropbox_token
     try:
-        r = requests.get(link, stream=True)
+        r = requests.get(jogo.dropbox_token, stream=True)
         r.raise_for_status()
+
         return StreamingResponse(
             r.iter_content(chunk_size=1024*1024),
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename={jogo.nome}.rar"}
+            headers={
+                "Content-Disposition": f"attachment; filename={jogo.nome}.zip"
+            }
         )
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao baixar: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
