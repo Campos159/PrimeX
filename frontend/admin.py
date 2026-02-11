@@ -20,6 +20,49 @@ from PyQt6.QtGui import QFontDatabase, QFont
 from PyQt6.QtCore import QThread, pyqtSignal
 from navbar import NavBar
 from api_config import API_BASE
+from urllib.parse import urljoin
+
+def api_url(path: str) -> str:
+    base = (API_BASE or "").rstrip("/") + "/"
+    return urljoin(base, path.lstrip("/"))
+
+def safe_json(response: requests.Response):
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+def debug_http_dialog(parent, title: str, response: requests.Response, extra: str = ""):
+    # Alguns provedores colocam request-id em headers diferentes
+    req_id = (
+        response.headers.get("x-request-id")
+        or response.headers.get("x-amzn-trace-id")
+        or response.headers.get("cf-ray")
+        or response.headers.get("x-vercel-id")
+        or response.headers.get("x-render-request-id")
+        or ""
+    )
+
+    body_preview = (response.text or "")[:3500]
+
+    QMessageBox.information(
+        parent,
+        title,
+        f"{extra}\n"
+        f"URL: {response.url}\n"
+        f"STATUS: {response.status_code}\n"
+        f"REQUEST-ID: {req_id}\n"
+        f"CONTENT-TYPE: {response.headers.get('content-type','')}\n\n"
+        f"BODY (preview):\n{body_preview}"
+    )
+
+def request_api(parent, method: str, path: str, *, json_body=None, timeout=15):
+    url = api_url(path)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    return requests.request(method, url, json=json_body, headers=headers, timeout=timeout)
 
 
 
@@ -519,9 +562,9 @@ class AdminPage(QWidget):
     def save_game(self):
         data = {
             "nome": (self.game_name.text() or "").strip(),
-            "descricao": (self.game_desc.toPlainText() or "").strip(),  # nunca None
+            "descricao": (self.game_desc.toPlainText() or "").strip(),
             "dropbox_token": (self.game_dropbox.text() or "").strip(),
-            "capa_url": (self.game_cover.text() or "").strip()  # pode ser ""
+            "capa_url": (self.game_cover.text() or "").strip()
         }
 
         if not data["nome"]:
@@ -533,27 +576,22 @@ class AdminPage(QWidget):
             return
 
         try:
-            response = requests.post(
-                f"{API_BASE}/admin/adicionar_jogo",
-                json=data,
-                timeout=15
-            )
+            response = request_api(self, "POST", "/admin/adicionar_jogo", json_body=data, timeout=20)
 
-            try:
-                payload = response.json()
-            except Exception:
-                payload = {"raw": response.text}
-
-            if response.status_code == 200:
-                QMessageBox.information(self, "Sucesso", "Jogo adicionado com sucesso!")
-                self.game_name.clear()
-                self.game_desc.clear()
-                self.game_dropbox.clear()
-                self.game_cover.clear()
-            else:
-                detail = payload.get("detail") or payload.get("message") or payload.get("raw") or str(payload)
+            # Debug SEMPRE quando der ruim (e opcionalmente quando ok)
+            if response.status_code != 200:
+                payload = safe_json(response) or {}
+                detail = payload.get("detail") or payload.get("message") or ""
+                debug_http_dialog(self, "Erro 500/4xx - adicionar_jogo", response, extra=f"DETAIL: {detail}")
                 QMessageBox.warning(self, "Erro",
-                                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail}")
+                                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail or response.text[:1200]}")
+                return
+
+            QMessageBox.information(self, "Sucesso", "Jogo adicionado com sucesso!")
+            self.game_name.clear()
+            self.game_desc.clear()
+            self.game_dropbox.clear()
+            self.game_cover.clear()
 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
@@ -579,39 +617,48 @@ class AdminPage(QWidget):
 
     def load_games(self):
         try:
-            response = requests.get(f"{API_BASE}/admin/listar_jogos")
-            if response.status_code == 200:
-                # limpar lista
-                while self.games_list.count():
-                    item = self.games_list.takeAt(0)
-                    if item.widget():
-                        item.widget().deleteLater()
+            response = request_api(self, "GET", "/admin/listar_jogos", timeout=20)
 
-                jogos = response.json().get("jogos", [])
-                for jogo in jogos:
-                    row = QHBoxLayout()
-                    label = QLabel(f"[{jogo['id']}] {jogo['nome']} - {jogo['descricao']}")
-                    label.setStyleSheet("color: white; font-size: 14px;")
-                    row.addWidget(label)
+            if response.status_code != 200:
+                payload = safe_json(response) or {}
+                detail = payload.get("detail") or payload.get("message") or ""
+                debug_http_dialog(self, "Erro 500/4xx - listar_jogos", response, extra=f"DETAIL: {detail}")
+                QMessageBox.warning(self, "Erro", f"Falha ao carregar jogos ({response.status_code}).\n\n{detail}")
+                return
 
-                    btn_edit = QPushButton("Editar")
-                    btn_edit.setStyleSheet("background-color: orange; color: white; padding: 5px;")
-                    btn_edit.clicked.connect(lambda _, j=jogo: self.edit_game(j))
-                    row.addWidget(btn_edit)
+            data = safe_json(response) or {}
+            jogos = data.get("jogos", [])
 
-                    btn_delete = QPushButton("Deletar")
-                    btn_delete.setStyleSheet("background-color: red; color: white; padding: 5px;")
-                    btn_delete.clicked.connect(lambda _, j=jogo: self.delete_game(j["id"]))
-                    row.addWidget(btn_delete)
+            # limpar lista
+            while self.games_list.count():
+                item = self.games_list.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
 
-                    container = QFrame()
-                    container.setLayout(row)
-                    self.games_list.addWidget(container)
+            for jogo in jogos:
+                row_widget = QFrame()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(10, 6, 10, 6)
 
-            else:
-                QMessageBox.warning(self, "Erro", f"Falha ao carregar jogos ({response.status_code})")
+                label = QLabel(f"[{jogo.get('id')}] {jogo.get('nome')} - {jogo.get('descricao')}")
+                label.setStyleSheet("color: white; font-size: 14px;")
+                row_layout.addWidget(label)
+
+                btn_edit = QPushButton("Editar")
+                btn_edit.setStyleSheet("background-color: orange; color: white; padding: 5px;")
+                btn_edit.clicked.connect(lambda _, j=jogo: self.edit_game(j))
+                row_layout.addWidget(btn_edit)
+
+                btn_delete = QPushButton("Deletar")
+                btn_delete.setStyleSheet("background-color: red; color: white; padding: 5px;")
+                btn_delete.clicked.connect(lambda _, jid=jogo.get("id"): self.delete_game(jid))
+                row_layout.addWidget(btn_delete)
+
+                self.games_list.addWidget(row_widget)
+
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor: {e}")
+            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
 
     def delete_game(self, jogo_id):
         confirm = QMessageBox.question(
@@ -621,7 +668,9 @@ class AdminPage(QWidget):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             try:
-                response = requests.delete(f"{API_BASE}/admin/deletar_jogo/{jogo_id}")
+                response = request_api(self, "DELETE", f"/admin/deletar_jogo/{jogo_id}", timeout=20)
+                if response.status_code != 200:
+                    debug_http_dialog(self, "Erro - deletar_jogo", response)
                 if response.status_code == 200:
                     QMessageBox.information(self, "Sucesso", "Jogo deletado com sucesso")
                     self.load_games()
@@ -659,15 +708,18 @@ class AdminPage(QWidget):
 
         def salvar():
             try:
-                response = requests.put(
-                    f"{API_BASE}/admin/editar_jogo/{jogo['id']}",
-                    json={
-                        "nome": nome_input.text(),
-                        "descricao": desc_input.toPlainText(),
-                        "dropbox_token": token_input.text(),
-                        "capa_url": capa_input.text()
-                    }
+                response = request_api(
+                    self, "PUT", f"/admin/editar_jogo/{jogo['id']}",
+                    json_body={
+                        "nome": (nome_input.text() or "").strip(),
+                        "descricao": (desc_input.toPlainText() or "").strip(),
+                        "dropbox_token": (token_input.text() or "").strip(),
+                        "capa_url": (capa_input.text() or "").strip()
+                    },
+                    timeout=20
                 )
+                if response.status_code != 200:
+                    debug_http_dialog(self, "Erro - editar_jogo", response)
                 if response.status_code == 200:
                     QMessageBox.information(self, "Sucesso", "Jogo atualizado com sucesso")
                     dialog.accept()

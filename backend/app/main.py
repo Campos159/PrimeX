@@ -38,6 +38,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import logging
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger( "uvicorn.error" )
+
+import os
+from app.database import DATABASE_URL
+
+@app.get("/debug/db")
+def debug_db():
+    return {
+        "DATABASE_URL": DATABASE_URL,
+        "cwd": os.getcwd(),
+        "write_test": _write_test()
+    }
+
+def _write_test():
+    try:
+        # tenta criar um arquivo no mesmo diretório do sqlite quando for sqlite:///...
+        if DATABASE_URL.startswith("sqlite:///"):
+            path = DATABASE_URL.replace("sqlite:///", "", 1)
+            d = os.path.dirname(path)
+            testfile = os.path.join(d, ".__writetest__")
+            with open(testfile, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(testfile)
+            return "ok"
+        return "not_sqlite"
+    except Exception as e:
+        return f"fail: {e}"
+
+
 
 @app.get("/health")
 def health():
@@ -99,14 +132,13 @@ class TokenDB(models.Base):
     token = Column(String(64), primary_key=True, index=True)
     type = Column(String(20), nullable=False)
     active = Column(Boolean, default=False, nullable=False)
-    type = Column(String, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     activated_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    active = Column(Boolean, default=False)  # False = não usado | True = usado
+
 
 
 def ativar_token_db(token_str: str, user_id: int, db: Session):
