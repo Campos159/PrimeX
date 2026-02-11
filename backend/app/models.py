@@ -28,6 +28,20 @@ class Game(Base):
     capa_url = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class TokenDB(Base):
+    __tablename__ = "tokens"
+
+    token = Column(String(64), primary_key=True, index=True)
+    type = Column(String(20), nullable=False)
+    active = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    activated_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
 
 
 class AccessCode(Base):

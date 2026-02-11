@@ -12,6 +12,7 @@ from app import models, schemas, crud
 from fastapi.responses import JSONResponse
 from fastapi import Body
 from fastapi.middleware.cors import CORSMiddleware
+from app.models import TokenDB
 
 print("✅ CARREGOU app/main.py")
 
@@ -22,7 +23,7 @@ print("✅ CARREGOU app/main.py")
 from app.database import SessionLocal, engine  # ✅ usa o mesmo engine/Base do projeto
 
 # Cria tabelas UMA vez, no mesmo banco
-models.Base.metadata.create_all(bind=engine)
+#Fmodels.Base.metadata.create_all(bind=engine)
 
 
 # ================================
@@ -47,13 +48,9 @@ logger = logging.getLogger( "uvicorn.error" )
 import os
 from app.database import DATABASE_URL
 
-@app.get("/debug/db")
-def debug_db():
-    return {
-        "DATABASE_URL": DATABASE_URL,
-        "cwd": os.getcwd(),
-        "write_test": _write_test()
-    }
+@app.on_event("startup")
+def on_startup():
+    models.Base.metadata.create_all(bind=engine)
 
 def _write_test():
     try:
@@ -125,19 +122,6 @@ def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
 # ================================
 # MODELOS ADICIONAIS (Jogos e Tokens)
 # ===============================
-
-class TokenDB(models.Base):
-    __tablename__ = "tokens"
-
-    token = Column(String(64), primary_key=True, index=True)
-    type = Column(String(20), nullable=False)
-    active = Column(Boolean, default=False, nullable=False)
-
-    created_at = Column(DateTime, default=datetime.utcnow)
-    activated_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, nullable=True)
-
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
 
 
@@ -289,13 +273,13 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 
     for _ in range(qtd):
         token_str = str(uuid.uuid4())
-        expiration = (now + dur) if dur else None
+        expiration = None
 
         db.add(TokenDB(
             token=token_str,
             type=request.type,
             created_at=now,
-            expires_at=expiration,
+            expires_at=None,
             active=False
         ))
 
@@ -365,9 +349,15 @@ def ativar_token(data: TokenActivateRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Token expirado")
 
     # Marca token como usado
+    now = datetime.utcnow()
+    dur = durations.get(token_db.type)
+
     token_db.active = True
-    token_db.activated_at = datetime.utcnow()
+    token_db.activated_at = now
     token_db.user_id = data.user_id
+
+    if dur:
+        token_db.expires_at = now + dur
 
     db.commit()
 

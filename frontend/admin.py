@@ -72,21 +72,19 @@ class LoadTokensThread(QThread):
 
     def run(self):
         try:
-            response = requests.get(
-                f"{API_BASE}/admin/listar_tokens",
-                timeout=10
-            )
+            url = api_url("/admin/listar_tokens")
+            response = requests.get(url, timeout=10)
 
             if response.status_code != 200:
-                self.error.emit("Erro ao carregar tokens")
+                self.error.emit(f"Erro {response.status_code}: {response.text}")
                 return
 
-            tokens = response.json().get("tokens", [])
+            data = response.json()
+            tokens = data.get("tokens", [])
             self.success.emit(tokens)
 
         except Exception as e:
             self.error.emit(str(e))
-
 
 
 class AdminPage(QWidget):
@@ -289,7 +287,16 @@ class AdminPage(QWidget):
             status_text = "VÁLIDO"
             status_color = "#4CAF50"
 
-            if t["active"]:
+            if not t["active"]:
+                status_text = "DISPONÍVEL"
+            elif t["expires_at"]:
+                expires = datetime.fromisoformat(t["expires_at"])
+                if expires < datetime.utcnow():
+                    status_text = "EXPIRADO"
+                else:
+                    status_text = "ATIVO"
+            else:
+                status_text = "PERMANENTE"
                 status_text = "USADO"
                 status_color = "#F44336"
             elif t["expires_at"]:
