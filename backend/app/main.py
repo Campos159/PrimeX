@@ -147,6 +147,83 @@ def ativar_token_db(token_str: str, user_id: int, db: Session):
     return token
 
 
+from sqlalchemy import desc
+
+@app.get("/admin/listar_usuarios")
+def listar_usuarios(db: Session = Depends(get_db)):
+    users = db.query(models.User).order_by(models.User.id.desc()).all()
+
+    result = []
+    now = datetime.utcnow()
+
+    for u in users:
+        # pega o token mais recente ATIVADO (ou seja: já usado pelo usuário)
+        tok = (
+            db.query(TokenDB)
+            .filter(TokenDB.user_id == u.id, TokenDB.active == True)
+            .order_by(desc(TokenDB.activated_at))
+            .first()
+        )
+
+        token_info = None
+        plano_status = "SEM PLANO"
+
+        if tok:
+            token_info = {
+                "token": tok.token,
+                "type": tok.type,
+                "activated_at": tok.activated_at.isoformat() if tok.activated_at else None,
+                "expires_at": tok.expires_at.isoformat() if tok.expires_at else None,
+            }
+
+            if tok.expires_at:
+                if tok.expires_at < now:
+                    plano_status = "VENCIDO"
+                else:
+                    plano_status = "ATIVO"
+            else:
+                # ativado e sem expiração => permanente
+                plano_status = "PERMANENTE"
+
+        # Se usuário estiver banido, status geral vira BANIDO
+        user_status = "ATIVO" if getattr(u, "is_active", True) else "BANIDO"
+
+        result.append({
+            "id": u.id,
+            "nome": u.nome,
+            "email": u.email,
+            "is_active": getattr(u, "is_active", True),
+            "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else None,
+            "user_status": user_status,
+            "plano_status": plano_status,
+            "token_info": token_info,
+        })
+
+    return {"usuarios": result}
+
+
+@app.put("/admin/banir_usuario/{user_id}")
+def banir_usuario(user_id: int, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    u.is_active = False
+    db.commit()
+    return {"message": "Usuário banido com sucesso", "id": u.id}
+
+
+@app.put("/admin/desbanir_usuario/{user_id}")
+def desbanir_usuario(user_id: int, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    u.is_active = True
+    db.commit()
+    return {"message": "Usuário desbanido com sucesso", "id": u.id}
+
+
 # ================================
 # CONFIGURAÇÕES DO DROPBOX
 # ================================

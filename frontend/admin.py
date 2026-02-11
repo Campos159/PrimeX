@@ -87,6 +87,28 @@ class LoadTokensThread(QThread):
             self.error.emit(str(e))
 
 
+class LoadUsersThread(QThread):
+    success = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            url = api_url("/admin/listar_usuarios")
+            response = requests.get(url, timeout=15)
+
+            if response.status_code != 200:
+                self.error.emit(f"Erro {response.status_code}: {response.text}")
+                return
+
+            data = response.json()
+            usuarios = data.get("usuarios", [])
+            self.success.emit(usuarios)
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+
 class AdminPage(QWidget):
 
     def __init__(self):
@@ -198,7 +220,7 @@ class AdminPage(QWidget):
         self.pages = {
             "Adicionar Jogo": self.create_add_game_page(),
             "Gerenciar Jogos": self.create_manage_games_page(),
-            "Gerenciar Usuários": self.create_placeholder_page("Tela para gerenciar usuários"),
+            "Gerenciar Usuários": self.create_manage_users_page(),
             "Gerenciar Tokens": self.create_manage_tokens_page(),
             "Estatísticas Gerais": self.create_placeholder_page("Tela com estatísticas do sistema"),
             "Gerar Tokens": self.create_token_page()
@@ -266,6 +288,8 @@ class AdminPage(QWidget):
         layout.addStretch()
         return frame
 
+
+
     def _make_copy_handler(self, tok: str):
         return lambda: self.copiar_token(tok)
 
@@ -283,28 +307,34 @@ class AdminPage(QWidget):
     def populate_tokens(self, tokens):
         from datetime import datetime
 
+        self.token_list.clear()
+
         for t in tokens:
-            status_text = "VÁLIDO"
-            status_color = "#4CAF50"
 
-            if not t["active"]:
+            # ---------- STATUS ----------
+            if not t.get("active"):
                 status_text = "DISPONÍVEL"
-            elif t["expires_at"]:
-                expires = datetime.fromisoformat(t["expires_at"])
-                if expires < datetime.utcnow():
-                    status_text = "EXPIRADO"
-                else:
-                    status_text = "ATIVO"
-            else:
-                status_text = "PERMANENTE"
-                status_text = "USADO"
-                status_color = "#F44336"
-            elif t["expires_at"]:
-                expires = datetime.fromisoformat(t["expires_at"])
-                if expires < datetime.utcnow():
-                    status_text = "EXPIRADO"
-                    status_color = "#FFC107"
+                status_color = "#4CAF50"  # verde
 
+            else:
+                expires_at = t.get("expires_at")
+
+                # Token permanente (ativado mas sem expiração)
+                if not expires_at:
+                    status_text = "PERMANENTE"
+                    status_color = "#2196F3"  # azul
+
+                else:
+                    expires = datetime.fromisoformat(expires_at)
+
+                    if expires < datetime.utcnow():
+                        status_text = "EXPIRADO"
+                        status_color = "#FFC107"  # amarelo
+                    else:
+                        status_text = "ATIVO"
+                        status_color = "#F44336"  # vermelho
+
+            # ---------- UI ----------
             item = QListWidgetItem()
             widget = QWidget()
             row = QHBoxLayout(widget)
@@ -321,7 +351,6 @@ class AdminPage(QWidget):
 
             copiar_btn = QPushButton("Copiar")
             copiar_btn.clicked.connect(self._make_copy_handler(t["token"]))
-
 
             row.addWidget(token_lbl)
             row.addStretch()
@@ -421,6 +450,156 @@ class AdminPage(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
             return
+
+    def create_manage_users_page(self):
+        frame = QFrame()
+        layout = QVBoxLayout(frame)
+
+        title = QLabel("Gerenciar Usuários")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #836FFF;")
+        layout.addWidget(title)
+
+        self.user_list = QListWidget()
+        self.user_list.setStyleSheet("""
+            QListWidget {
+                background-color: #0d0b1f;
+                border: 2px solid #2a245f;
+                border-radius: 12px;
+                color: white;
+            }
+        """)
+        layout.addWidget(self.user_list)
+
+        btns = QHBoxLayout()
+
+        refresh_btn = QPushButton("Atualizar Usuários")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007eff;
+                color: white;
+                font-size: 14px;
+                padding: 8px;
+                border-radius: 6px;
+            }
+            QPushButton:hover { background-color: #005bb5; }
+        """)
+        refresh_btn.clicked.connect(self.load_users)
+        btns.addWidget(refresh_btn)
+
+        layout.addLayout(btns)
+        layout.addStretch()
+        return frame
+
+    def load_users(self):
+        self.user_list.clear()
+
+        th = LoadUsersThread()
+        th.success.connect(self.populate_users)
+        th.error.connect(lambda msg: QMessageBox.critical(self, "Erro", f"Falha ao carregar usuários:\n{msg}"))
+        th.finished.connect(lambda: self.threads.remove(th) if th in self.threads else None)
+
+        self.threads.append(th)
+        th.start()
+
+    def populate_users(self, usuarios):
+        from datetime import datetime
+
+        self.user_list.clear()
+
+        for u in usuarios:
+            user_id = u.get("id")
+            nome = u.get("nome", "")
+            email = u.get("email", "")
+            is_active = bool(u.get("is_active", True))
+
+            plano_status = u.get("plano_status", "SEM PLANO")
+            token_info = u.get("token_info") or {}
+            token_usado = token_info.get("token", "")
+            plano_tipo = token_info.get("type", "")
+
+            # cores
+            if not is_active:
+                status_text = "BANIDO"
+                status_color = "#F44336"  # vermelho
+            else:
+                if plano_status == "ATIVO":
+                    status_text = "ATIVO"
+                    status_color = "#4CAF50"  # verde
+                elif plano_status == "VENCIDO":
+                    status_text = "VENCIDO"
+                    status_color = "#FFC107"  # amarelo
+                elif plano_status == "PERMANENTE":
+                    status_text = "PERMANENTE"
+                    status_color = "#2196F3"  # azul
+                else:
+                    status_text = "SEM PLANO"
+                    status_color = "#9E9E9E"  # cinza
+
+            # linha visual
+            item = QListWidgetItem()
+            widget = QWidget()
+            row = QHBoxLayout(widget)
+            row.setContentsMargins(10, 6, 10, 6)
+
+            left = QLabel(f"[{user_id}] {nome}  •  {email}")
+            left.setStyleSheet("color: white; font-size: 13px;")
+            row.addWidget(left)
+
+            row.addStretch()
+
+            plano_lbl = QLabel(plano_tipo or "-")
+            plano_lbl.setStyleSheet("color: #836FFF; font-weight: bold;")
+            row.addWidget(plano_lbl)
+
+            token_lbl = QLabel((token_usado[:8] + "..." + token_usado[-6:]) if token_usado else "-")
+            token_lbl.setStyleSheet("color: #BBBBBB; font-size: 12px;")
+            row.addWidget(token_lbl)
+
+            status_lbl = QLabel(status_text)
+            status_lbl.setStyleSheet(f"color: {status_color}; font-weight: bold;")
+            row.addWidget(status_lbl)
+
+            action_btn = QPushButton("Desbanir" if not is_active else "Banir")
+            action_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2a245f;
+                    color: white;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                }
+                QPushButton:hover { background-color: #3b3390; }
+            """)
+            action_btn.clicked.connect(lambda _, uid=user_id, active=is_active: self.toggle_ban_user(uid, active))
+            row.addWidget(action_btn)
+
+            item.setSizeHint(widget.sizeHint())
+            self.user_list.addItem(item)
+            self.user_list.setItemWidget(item, widget)
+
+    def toggle_ban_user(self, user_id: int, is_active: bool):
+        try:
+            if is_active:
+                confirm = QMessageBox.question(
+                    self, "Confirmar Ban",
+                    f"Tem certeza que deseja BANIR o usuário ID {user_id}?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if confirm != QMessageBox.StandardButton.Yes:
+                    return
+
+                response = request_api(self, "PUT", f"/admin/banir_usuario/{user_id}", timeout=15)
+            else:
+                response = request_api(self, "PUT", f"/admin/desbanir_usuario/{user_id}", timeout=15)
+
+            if response.status_code != 200:
+                debug_http_dialog(self, "Erro - ban/desban", response)
+                QMessageBox.warning(self, "Erro", f"Falha ({response.status_code}).")
+                return
+
+            self.load_users()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
 
     def create_placeholder_page(self, text):
         frame = QFrame()
