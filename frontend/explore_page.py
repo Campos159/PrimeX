@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QSize
 from profile import ProfilePage
 from admin import AdminPage
 from navbar import NavBar
-from downloader import baixar_jogo
+from downloader import baixar_jogo, decrypt_file_to
 from filter_bar import FilterBar
 from PyQt6.QtGui import QFontDatabase
 from api_config import API_BASE
@@ -100,6 +100,19 @@ def find_best_exe(install_dir: str) -> str:
     candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return candidates[0][2]
 
+def user_can_download(user_info: dict) -> bool:
+    """
+    Regra local (client-side). O backend ainda deve validar (regra real).
+    Aqui é só pra bloquear o botão.
+    """
+    plano = (user_info or {}).get("plano_status") or (user_info or {}).get("status") or ""
+    plano = str(plano).upper().strip()
+
+    # Ajuste os nomes conforme seu backend:
+    # ATIVO / PERMANENTE / VENCIDO / SEM PLANO etc
+    return plano in ("ATIVO", "PERMANENTE")
+
+
 
 
 
@@ -107,13 +120,16 @@ def find_best_exe(install_dir: str) -> str:
 # GAME CARD
 # =========================
 class GameCard(QWidget):
-    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None):
+    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None):
+
         super().__init__()
 
+        self.user_info = user_info or {}
         self.download_url = download_url
         self.game_title = f"{title_top} {title_bottom}".strip()
         self.image_url = image_url
         self.genres = genres or []
+
 
         self.setFixedSize(260, 380)
 
@@ -331,19 +347,22 @@ class GameCard(QWidget):
             self.play_game()
             return
 
-        # UI inicial
+        # ✅ bloqueia se não tiver plano/token ativo
+        if not user_can_download(self.user_info):
+            QMessageBox.warning(self, "Acesso negado",
+                                "Seu plano/token não está ATIVO. Ative seu acesso para baixar jogos.")
+            return
+
         self.btn_install.setText("BAIXANDO... 0%")
         self.btn_install.setEnabled(False)
 
         signals = baixar_jogo(self.game_title, self.download_url, card=self)
 
-        # PROGRESSO
         signals.progress.connect(self._set_progress)
 
-        # FINALIZOU
-        signals.finished.connect(self._on_install_finished)
+        # MUITO IMPORTANTE: capture o signals aqui
+        signals.finished.connect(lambda: self._on_install_finished(signals))
 
-        # ERRO
         def on_error(msg):
             self.btn_install.setText("INSTALAR")
             self.btn_install.setEnabled(True)
@@ -351,16 +370,23 @@ class GameCard(QWidget):
 
         signals.error.connect(on_error)
 
-    def _on_install_finished(self):
-        install_dir = os.path.join(GAMES_DIR, self.game_title)
+    def _on_install_finished(self, signals):
+        install_dir = signals.install_dir or os.path.join(GAMES_DIR, self.game_title)
 
-        mark_installed(
-            self.game_title,
-            install_dir,
-            exe_name="",
-            capa_url=self.image_url,
-            genero=self.genres
-        )
+        # aqui o downloader já tentou detectar exe e proteger
+        exe_rel = getattr(signals, "exe_relpath", "") or ""
+        exe_enc = getattr(signals, "exe_enc_path", "") or ""
+
+        # salva no instalados.json
+        data = load_installed()
+        data[self.game_title] = {
+            "install_dir": install_dir,
+            "exe": exe_rel,  # caminho relativo do exe original (que foi removido)
+            "exe_enc": exe_enc,  # caminho do arquivo criptografado
+            "capa_url": self.image_url or "",
+            "genero": self.genres or []
+        }
+        save_installed(data)
 
         self.set_playable()
         QMessageBox.information(self, "Sucesso", f"{self.game_title} instalado com sucesso!")
@@ -368,28 +394,53 @@ class GameCard(QWidget):
     def play_game(self):
         data = load_installed()
         info = data.get(self.game_title) or {}
-        install_dir = info.get("install_dir", "")
 
+        install_dir = info.get("install_dir", "")
         if not install_dir or not os.path.isdir(install_dir):
             QMessageBox.warning(self, "Erro", "Jogo não encontrado. Reinstale.")
             self.btn_install.setText("INSTALAR")
             return
 
         exe_rel = (info.get("exe") or "").strip()
+        exe_enc = (info.get("exe_enc") or "").strip()
 
-        # se exe não estiver salvo (ex: jogo antigo), tenta detectar agora
-        if not exe_rel:
-            exe_rel = find_best_exe(install_dir)
-            if exe_rel:
-                mark_installed(self.game_title, install_dir, exe_name=exe_rel)
-
+        # 1) se ainda existir exe (caso antigo), tenta abrir direto
         if exe_rel:
             exe_path = os.path.join(install_dir, exe_rel)
             if os.path.exists(exe_path):
                 os.startfile(exe_path)
                 return
 
-        # fallback: abre a pasta se não conseguir abrir exe
+        # 2) se exe foi protegido: descriptografa para temp e executa
+        if exe_enc and os.path.exists(exe_enc):
+            run_dir = os.path.join(os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "PrimeX", "run_cache",
+                                   self.game_title)
+            os.makedirs(run_dir, exist_ok=True)
+
+            # nome do exe temp
+            temp_exe = os.path.join(run_dir, os.path.basename(exe_rel) if exe_rel else f"{self.game_title}.exe")
+
+            try:
+                decrypt_file_to(exe_enc, temp_exe)
+                os.startfile(temp_exe)
+                return
+            except Exception as e:
+                QMessageBox.warning(self, "Erro", f"Não foi possível iniciar o jogo:\n{e}")
+                return
+
+        # 3) fallback: tenta detectar exe normal (casos antigos)
+        exe_rel = find_best_exe(install_dir)
+        if exe_rel:
+            exe_path = os.path.join(install_dir, exe_rel)
+            if os.path.exists(exe_path):
+                # salva pra não precisar detectar toda hora
+                info["exe"] = exe_rel
+                data[self.game_title] = info
+                save_installed(data)
+
+                os.startfile(exe_path)
+                return
+
         QMessageBox.information(self, "Atenção",
                                 "Não consegui localizar o executável automaticamente. Abrindo a pasta.")
         os.startfile(install_dir)
@@ -552,8 +603,10 @@ QPushButton:hover {
                 title_top=jogo.get("nome", ""),
                 title_bottom="",
                 download_url=f"{API_BASE}/jogos/{jogo['id']}/download?user_id={self.user_info['id']}",
-                genres=jogo.get("genero", [])  # <<< NOVO: passa gêneros ao card
+                genres=jogo.get("genero", []),
+                user_info=self.user_info
             )
+
             self.cards.append(card)
             row = idx // 5
             col = idx % 5
