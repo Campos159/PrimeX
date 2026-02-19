@@ -592,6 +592,22 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
         # fallback
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/admin/dropbox/listar")
+def listar_pasta_dropbox(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    try:
+        res = dbx.files_list_folder("/jogos")
+        return {
+            "arquivos": [
+                {
+                    "name": e.name,
+                    "path_display": e.path_display
+                } for e in res.entries
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # =======================
