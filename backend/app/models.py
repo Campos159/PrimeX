@@ -42,6 +42,27 @@ class TokenDB(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
 
+from sqlalchemy import Column, Integer, String, DateTime, Text
+from datetime import datetime
+
+class DropboxCreds(Base):
+    __tablename__ = "dropbox_creds"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+
+    token_type = Column(String(20), default="bearer")
+    scope = Column(Text, nullable=True)
+    account_id = Column(String(120), nullable=True)
+
+    # quando o access_token expira (UTC)
+    expires_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
 
 
 class AccessCode(Base):

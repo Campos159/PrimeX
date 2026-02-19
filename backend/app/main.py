@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 from fastapi import Body
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import TokenDB
+from app.models import DropboxCreds
+from datetime import datetime, timedelta
 
 print("✅ CARREGOU app/main.py")
 
@@ -266,6 +268,44 @@ def normalizar_dropbox_path(p: str) -> str:
 
     return p
 
+def get_dropbox_client(db: Session) -> dropbox.Dropbox:
+    creds = db.query(DropboxCreds).order_by(DropboxCreds.id.desc()).first()
+    if not creds:
+        raise HTTPException(status_code=500, detail="Dropbox não está conectado. Faça OAuth primeiro.")
+
+    # Se não tem expires_at, assume que ainda serve (ou token permanente)
+    if creds.expires_at and creds.expires_at <= datetime.utcnow():
+        # precisa refresh
+        if not creds.refresh_token:
+            raise HTTPException(status_code=500, detail="Token expirou e não existe refresh_token. Refaça o OAuth.")
+
+        rr = requests.post(
+            "https://api.dropboxapi.com/oauth2/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": creds.refresh_token,
+            },
+            auth=(DROPBOX_APP_KEY, DROPBOX_APP_SECRET),
+            timeout=20
+        )
+        if rr.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Falha ao renovar token Dropbox: {rr.text}")
+
+        jd = rr.json()
+        new_access = jd.get("access_token")
+        expires_in = jd.get("expires_in")
+
+        if not new_access:
+            raise HTTPException(status_code=500, detail="Refresh não retornou access_token.")
+
+        creds.access_token = new_access
+        if expires_in:
+            creds.expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
+        creds.updated_at = datetime.utcnow()
+        db.commit()
+
+    return dropbox.Dropbox(creds.access_token, timeout=120)
+
 # ================================
 # MODELOS Pydantic
 # ================================
@@ -387,20 +427,24 @@ DROPBOX_APP_KEY = os.getenv("DROPBOX_APP_KEY", "")
 DROPBOX_APP_SECRET = os.getenv("DROPBOX_APP_SECRET", "")
 DROPBOX_REDIRECT_URI = "https://apiprimex.online/auth/dropbox/callback"
 
+ADMIN_KEY = os.getenv("ADMIN_KEY", "")
+
 @app.get("/auth/dropbox/start")
-def dropbox_start():
+def dropbox_start(k: str):
+    if not ADMIN_KEY or k != ADMIN_KEY:
+        raise HTTPException(status_code=401, detail="Não autorizado")
+
     params = {
         "client_id": DROPBOX_APP_KEY,
         "response_type": "code",
         "redirect_uri": DROPBOX_REDIRECT_URI,
-        "token_access_type": "offline",  # pega refresh_token
+        "token_access_type": "offline",
     }
     url = "https://www.dropbox.com/oauth2/authorize?" + urllib.parse.urlencode(params)
     return RedirectResponse(url)
 
 @app.get("/auth/dropbox/callback")
-def dropbox_callback(code: str):
-    # troca code por token
+def dropbox_callback(code: str, db: Session = Depends(get_db)):
     r = requests.post(
         "https://api.dropboxapi.com/oauth2/token",
         data={
@@ -415,8 +459,46 @@ def dropbox_callback(code: str):
         raise HTTPException(status_code=400, detail=r.text)
 
     data = r.json()
-    # aqui você salva access_token (e refresh_token se vier)
-    return data
+
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")  # pode vir ou não
+    token_type = data.get("token_type", "bearer")
+    expires_in = data.get("expires_in")        # segundos (geralmente vem)
+    scope = data.get("scope")
+    account_id = data.get("account_id")
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Dropbox não retornou access_token.")
+
+    expires_at = None
+    if expires_in:
+        expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
+
+    creds = db.query(DropboxCreds).order_by(DropboxCreds.id.desc()).first()
+    if not creds:
+        creds = DropboxCreds(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type=token_type,
+            scope=scope,
+            account_id=account_id,
+            expires_at=expires_at,
+        )
+        db.add(creds)
+    else:
+        creds.access_token = access_token
+        # refresh_token às vezes só vem na primeira autorização — não apague se não vier
+        if refresh_token:
+            creds.refresh_token = refresh_token
+        creds.token_type = token_type
+        creds.scope = scope
+        creds.account_id = account_id
+        creds.expires_at = expires_at
+        creds.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    return {"ok": True, "message": "Dropbox conectado com sucesso!"}
 
 
 from fastapi import Body
@@ -439,13 +521,14 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 
     for _ in range(qtd):
         token_str = str(uuid.uuid4())
-        expiration = None
+
+        expiration = (now + dur) if dur else None
 
         db.add(TokenDB(
             token=token_str,
             type=request.type,
             created_at=now,
-            expires_at=None,
+            expires_at=expiration,
             active=False
         ))
 
@@ -480,6 +563,7 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
 
     try:
         # baixa do dropbox via API oficial (não link público)
+        dbx = get_dropbox_client(db)
         md, res = dbx.files_download(dropbox_path)
 
         def iterator():
