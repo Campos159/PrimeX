@@ -411,12 +411,10 @@ def listar_tokens(db: Session = Depends(get_db)):
     }
 
 @app.get("/dropbox/teste")
-def dropbox_teste():
-    try:
-        acc = dbx.users_get_current_account()
-        return {"ok": True, "name": acc.name.display_name}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def dropbox_teste(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    acc = dbx.users_get_current_account()
+    return {"ok": True, "name": acc.name.display_name}
 
 import os
 import urllib.parse
@@ -616,6 +614,18 @@ def dropbox_root(db: Session = Depends(get_db)):
         return {"entries": [{"name": e.name, "path_display": e.path_display} for e in res.entries]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/dropbox/root")
+def db_root(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    r = dbx.files_list_folder("")  # root do token
+    return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
+
+@app.get("/admin/dropbox/jogos")
+def db_jogos(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    r = dbx.files_list_folder("/jogos")
+    return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
 
 # =======================
 # ROTAS - Token
