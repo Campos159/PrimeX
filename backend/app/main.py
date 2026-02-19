@@ -608,7 +608,14 @@ def listar_pasta_dropbox(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
+@app.get("/admin/dropbox/root")
+def dropbox_root(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    try:
+        res = dbx.files_list_folder("")
+        return {"entries": [{"name": e.name, "path_display": e.path_display} for e in res.entries]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =======================
 # ROTAS - Token
