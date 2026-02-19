@@ -370,6 +370,14 @@ def listar_tokens(db: Session = Depends(get_db)):
         ]
     }
 
+@app.get("/dropbox/teste")
+def dropbox_teste():
+    try:
+        acc = dbx.users_get_current_account()
+        return {"ok": True, "name": acc.name.display_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 from fastapi import Body
 
