@@ -378,6 +378,46 @@ def dropbox_teste():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+import os
+import urllib.parse
+from fastapi import Request
+from fastapi.responses import RedirectResponse
+
+DROPBOX_APP_KEY = os.getenv("DROPBOX_APP_KEY", "")
+DROPBOX_APP_SECRET = os.getenv("DROPBOX_APP_SECRET", "")
+DROPBOX_REDIRECT_URI = "https://apiprimex.online/auth/dropbox/callback"
+
+@app.get("/auth/dropbox/start")
+def dropbox_start():
+    params = {
+        "client_id": DROPBOX_APP_KEY,
+        "response_type": "code",
+        "redirect_uri": DROPBOX_REDIRECT_URI,
+        "token_access_type": "offline",  # pega refresh_token
+    }
+    url = "https://www.dropbox.com/oauth2/authorize?" + urllib.parse.urlencode(params)
+    return RedirectResponse(url)
+
+@app.get("/auth/dropbox/callback")
+def dropbox_callback(code: str):
+    # troca code por token
+    r = requests.post(
+        "https://api.dropboxapi.com/oauth2/token",
+        data={
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": DROPBOX_REDIRECT_URI,
+        },
+        auth=(DROPBOX_APP_KEY, DROPBOX_APP_SECRET),
+        timeout=20
+    )
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail=r.text)
+
+    data = r.json()
+    # aqui você salva access_token (e refresh_token se vier)
+    return data
+
 
 from fastapi import Body
 
