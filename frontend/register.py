@@ -9,8 +9,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtCore import Qt
 from api_config import API_BASE
+from utils import resource_path
 
 from login import LoginWindow
+
 
 
 # ================================
@@ -57,7 +59,8 @@ class RegisterWindow(QWidget):
         # ================================
         # LOGO (ESPAÇO MAIOR)
         # ================================
-        logo_path = "assets/logos/primex_logo.png"
+        logo_path = resource_path(os.path.join("logos", "primex_logo.png"))
+        pix = QPixmap(logo_path)
         if os.path.exists(logo_path):
             pix = QPixmap(logo_path).scaled(
                 400, 250,

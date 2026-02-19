@@ -243,14 +243,28 @@ def usuario_tem_plano_ativo(user_id: int, db: Session):
 # ================================
 # CONFIGURAÇÕES DO DROPBOX
 # ================================
-DROPBOX_TOKEN = "SEU_TOKEN_AQUI"
 DROPBOX_FOLDER = "/jogos"
-dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+DROPBOX_TOKEN = os.getenv("DROPBOX_TOKEN", "")
+if not DROPBOX_TOKEN:
+    print("❌ DROPBOX_TOKEN não configurado")
+dbx = dropbox.Dropbox(DROPBOX_TOKEN, timeout=120)
 
-def transformar_link_dropbox(link: str) -> str:
-    if "dropbox.com" in link:
-        return link.replace("?dl=0", "?dl=1").replace("www.dropbox.com", "dl.dropboxusercontent.com")
-    return link
+def normalizar_dropbox_path(p: str) -> str:
+    p = (p or "").strip()
+
+    # se alguém colar link público, tenta extrair path automaticamente
+    if "dropbox.com" in p:
+        # exemplo: https://www.dropbox.com/scl/fi/.../jogos/Arquivo.zip?dl=0
+        # aqui você pode exigir path manualmente para simplificar
+        raise HTTPException(
+            status_code=400,
+            detail="Use apenas o CAMINHO do arquivo no Dropbox. Ex: /jogos/Arquivo.zip"
+        )
+
+    if not p.startswith("/"):
+        p = "/" + p
+
+    return p
 
 # ================================
 # MODELOS Pydantic
@@ -269,16 +283,20 @@ class TokenRequest(BaseModel):
 # ================================
 @app.post("/admin/adicionar_jogo")
 def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
-    dropbox_token = transformar_link_dropbox(jogo.dropbox_token)
+
+    dropbox_path = normalizar_dropbox_path(jogo.dropbox_token)
+
     novo = models.Game(
         nome=jogo.nome,
         descricao=jogo.descricao,
-        dropbox_token=dropbox_token,
+        dropbox_token=dropbox_path,   # ✅ AGORA CORRETO
         capa_url=jogo.capa_url or ""
     )
+
     db.add(novo)
     db.commit()
     db.refresh(novo)
+
     return {"message": "Jogo adicionado com sucesso", "id": novo.id}
 
 @app.get("/admin/listar_jogos")
@@ -296,14 +314,21 @@ def listar_jogos(db: Session = Depends(get_db)):
 
 @app.put("/admin/editar_jogo/{jogo_id}")
 def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
+
     db_jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
+
     if not db_jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
+
+    dropbox_path = normalizar_dropbox_path(jogo.dropbox_token)
+
     db_jogo.nome = jogo.nome
     db_jogo.descricao = jogo.descricao
-    db_jogo.dropbox_token = transformar_link_dropbox(jogo.dropbox_token)
+    db_jogo.dropbox_token = dropbox_path   # ✅ AGORA CORRETO
     db_jogo.capa_url = jogo.capa_url or ""
+
     db.commit()
+
     return {"message": "Jogo atualizado com sucesso"}
 
 @app.delete("/admin/deletar_jogo/{jogo_id}")
@@ -391,37 +416,49 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 # ROTAS - DOWNLOAD DE JOGOS
 # ================================
 @app.get("/jogos/{jogo_id}/download")
-def baixar_jogo(
-    jogo_id: int,
-    user_id: int,   # ← obrigatório
-    db: Session = Depends(get_db)
-):
+def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
     # 🔐 valida plano
     if not usuario_tem_plano_ativo(user_id, db):
-        raise HTTPException(
-            status_code=403,
-            detail="Usuário sem plano ativo"
-        )
+        raise HTTPException(status_code=403, detail="Usuário sem plano ativo")
 
     jogo = db.query(models.Game).filter(models.Game.id == jogo_id).first()
     if not jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
 
+    # agora jogo.dropbox_token deve ser PATH: /jogos/arquivo.zip
+    dropbox_path = (jogo.dropbox_token or "").strip()
+    if not dropbox_path.startswith("/"):
+        dropbox_path = "/" + dropbox_path
+
     try:
-        r = requests.get(jogo.dropbox_token, stream=True)
-        r.raise_for_status()
+        # baixa do dropbox via API oficial (não link público)
+        md, res = dbx.files_download(dropbox_path)
+
+        def iterator():
+            while True:
+                chunk = res.raw.read(1024 * 1024)  # 1MB
+                if not chunk:
+                    break
+                yield chunk
+
+        filename = os.path.basename(dropbox_path) or f"{jogo.nome}.zip"
 
         return StreamingResponse(
-            r.iter_content(chunk_size=1024*1024),
+            iterator(),
             media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f"attachment; filename={jogo.nome}.zip"
-            }
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except dropbox.exceptions.ApiError as e:
+        # arquivo não existe / sem permissão etc
+        raise HTTPException(status_code=404, detail=f"Arquivo não encontrado no Dropbox: {e}")
 
+    except dropbox.exceptions.AuthError:
+        raise HTTPException(status_code=500, detail="Dropbox token inválido/expirado no servidor")
+
+    except Exception as e:
+        # fallback
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

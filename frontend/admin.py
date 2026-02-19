@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QComboBox, QMessageBox
 )
+from PyQt6.QtWidgets import QScrollArea
 from PyQt6.QtCore import Qt
 import secrets
 import string
@@ -788,20 +789,59 @@ class AdminPage(QWidget):
     def create_manage_games_page(self):
         frame = QFrame()
         layout = QVBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
         title = QLabel("Gerenciar Jogos")
         title.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
         layout.addWidget(title)
 
-        self.games_list = QVBoxLayout()  # usamos QVBoxLayout para ter botões junto
-        layout.addLayout(self.games_list)
+        # ✅ Scroll
+        self.games_scroll = QScrollArea()
+        self.games_scroll.setWidgetResizable(True)
+        self.games_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.games_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.games_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #0d0b1f;
+                width: 12px;
+                margin: 6px 0 6px 0;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #836FFF;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #9a7dff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # ✅ Conteúdo do scroll (onde os rows vão ficar)
+        self.games_scroll_content = QWidget()
+        self.games_list = QVBoxLayout(self.games_scroll_content)
+        self.games_list.setContentsMargins(10, 10, 10, 10)
+        self.games_list.setSpacing(10)
+        self.games_list.setAlignment(Qt.AlignmentFlag.AlignTop)  # ✅ não “puxa” pra baixo
+
+        self.games_scroll.setWidget(self.games_scroll_content)
+        layout.addWidget(self.games_scroll, stretch=1)
 
         refresh_btn = QPushButton("Atualizar Lista")
-        refresh_btn.setStyleSheet("background-color: #007eff; color: white; font-size: 18px;")
+        refresh_btn.setStyleSheet(
+            "background-color: #007eff; color: white; font-size: 18px; padding: 10px; border-radius: 8px;")
         refresh_btn.clicked.connect(self.load_games)
         layout.addWidget(refresh_btn)
 
-        layout.addStretch()
         return frame
 
     def load_games(self):
@@ -827,12 +867,39 @@ class AdminPage(QWidget):
 
             for jogo in jogos:
                 row_widget = QFrame()
+                row_widget.setFixedHeight(56)
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(10, 6, 10, 6)
 
-                label = QLabel(f"[{jogo.get('id')}] {jogo.get('nome')} - {jogo.get('descricao')}")
+                nome = (jogo.get("nome") or "").strip()
+                desc = (jogo.get("descricao") or "").strip()
+
+                label = QLabel(f"[{jogo.get('id')}] {nome}")
                 label.setStyleSheet("color: white; font-size: 14px;")
-                row_layout.addWidget(label)
+                label.setWordWrap(False)
+                label.setMinimumWidth(0)
+                label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                row_layout.addWidget(label, stretch=1)
+
+                btn_details = QPushButton("Detalhes")
+                btn_details.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(131,111,255,0.12);
+                        border: 1px solid #836FFF;
+                        color: #e0d9ff;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        font-size: 13px;
+                    }
+                    QPushButton:hover {
+                        background-color: #836FFF;
+                        color: #0d0b1f;
+                    }
+                """)
+                btn_details.clicked.connect(lambda _, n=nome, d=desc: QMessageBox.information(
+                    self, f"Descrição - {n}", d if d else "Sem descrição."
+                ))
+                row_layout.addWidget(btn_details)
 
                 btn_edit = QPushButton("Editar")
                 btn_edit.setStyleSheet("background-color: orange; color: white; padding: 5px;")

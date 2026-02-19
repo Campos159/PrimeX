@@ -3,12 +3,12 @@ import os
 import json
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
-    QGridLayout, QSizePolicy, QSpacerItem, QLineEdit, QMenu, QMessageBox
+    QGridLayout, QSizePolicy, QMessageBox
 )
-from PyQt6.QtGui import QPixmap, QImage, QIcon, QPainter, QColor
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt
 from profile import ProfilePage
-from admin import AdminPage
 from navbar import NavBar
 from downloader import baixar_jogo, decrypt_file_to
 from filter_bar import FilterBar
@@ -16,10 +16,15 @@ from PyQt6.QtGui import QFontDatabase
 from api_config import API_BASE
 import hashlib
 import requests
+from PyQt6.QtWidgets import QScrollArea
+from utils import resource_path
+from session import load_session
+from PyQt6.QtWidgets import QDialog, QTextEdit
+from PyQt6.QtGui import QFont
 
 
 
-FONT_PATH = os.path.join(os.getcwd(), "assets", "fonts", "VT323-Regular.ttf")
+FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
 
 # Pastas/arquivos
@@ -27,16 +32,6 @@ base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
 GAMES_DIR = os.path.join(base_dir, "PrimeX", "games")
 JSON_INSTALLED = os.path.join(GAMES_DIR, "instalados.json")
 
-
-def load_installed():
-    if not os.path.exists(JSON_INSTALLED):
-        return {}
-    try:
-        with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
 
 def save_installed(data: dict):
     os.makedirs(GAMES_DIR, exist_ok=True)
@@ -100,18 +95,57 @@ def find_best_exe(install_dir: str) -> str:
     candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return candidates[0][2]
 
-def user_can_download(user_info: dict) -> bool:
-    """
-    Regra local (client-side). O backend ainda deve validar (regra real).
-    Aqui é só pra bloquear o botão.
-    """
-    plano = (user_info or {}).get("plano_status") or (user_info or {}).get("status") or ""
-    plano = str(plano).upper().strip()
 
-    # Ajuste os nomes conforme seu backend:
-    # ATIVO / PERMANENTE / VENCIDO / SEM PLANO etc
+def user_can_download(user_info: dict) -> bool:
+    if not user_info:
+        return False
+
+    # se você salva isso no profile/session:
+    if user_info.get("plan_active") is True:
+        return True
+
+    # fallback: se vier um campo texto do backend
+    plano = str(user_info.get("plan", "")).upper().strip()
     return plano in ("ATIVO", "PERMANENTE")
 
+
+
+def load_installed():
+    if not os.path.exists(JSON_INSTALLED):
+        return {}
+
+    try:
+        with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # formato certo
+        if isinstance(data, dict):
+            return data
+
+        # formato antigo: lista -> converte
+        if isinstance(data, list):
+            converted = {}
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                nome = (item.get("nome") or item.get("title") or "").strip()
+                if not nome:
+                    continue
+                converted[nome] = {
+                    "install_dir": item.get("install_dir", ""),
+                    "exe": item.get("exe", ""),
+                    "exe_enc": item.get("exe_enc", ""),
+                    "capa_url": item.get("capa_url", ""),
+                    "genero": item.get("genero", []),
+                    "descricao": item.get("descricao", "")
+                }
+            save_installed(converted)  # salva convertido
+            return converted
+
+        return {}
+
+    except Exception:
+        return {}
 
 
 
@@ -120,18 +154,28 @@ def user_can_download(user_info: dict) -> bool:
 # GAME CARD
 # =========================
 class GameCard(QWidget):
-    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None):
+    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao=""):
+
 
         super().__init__()
 
-        self.user_info = user_info or {}
+        # estado do usuário (vem do MainWindow)
+        self.user_info = dict(user_info or {})
+
+        # mescla sessão salva por cima (persistência)
+        sess = load_session()
+        if isinstance(sess, dict):
+            self.user_info.update(sess)
+
         self.download_url = download_url
         self.game_title = f"{title_top} {title_bottom}".strip()
         self.image_url = image_url
         self.genres = genres or []
+        self.descricao = descricao
 
 
-        self.setFixedSize(260, 380)
+
+        self.setFixedSize(260, 485)
 
         # ===== CARD ROOT =====
         self.setStyleSheet("""
@@ -153,8 +197,8 @@ class GameCard(QWidget):
 
         # ===== IMAGE =====
         self.image_label = QLabel()
-        self.image_label.setFixedSize(260, 220)  # ✅ agora tá no lugar certo
-        self.image_label.setFixedHeight(220)
+        self.image_label.setFixedSize(260, 210)
+        self.image_label.setFixedHeight(210)
         self.image_label.setScaledContents(False)
         self.image_label.setStyleSheet("""
         QLabel {
@@ -176,21 +220,28 @@ class GameCard(QWidget):
 
         root.addWidget(self.image_label)
         # ===== TITLE =====
-        title = QLabel(self.game_title.upper())
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("""
-        color: #e0d9ff;
-        font-size: 22px;
-        letter-spacing: 2px;
-        padding: 12px;
-        background-color: rgba(0,0,0,0.3);
+
+        self.title_label = QLabel(self.game_title.upper())
+        self.title_label.setFixedHeight(64)  # 2 linhas
+        self.title_label.setWordWrap(True)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.title_label.setStyleSheet("""
+            color: #e0d9ff;
+            font-size: 20px;
+            letter-spacing: 1px;
+            padding: 10px 12px;
+            background-color: rgba(0,0,0,0.30);
         """)
 
-        root.addWidget(title)
+        root.addWidget(self.title_label)
+
+        # aplica texto com "..." se ficar grande
+        self._update_title_text()
 
         # ===== BUTTONS =====
         btns = QVBoxLayout()
-        btns.setContentsMargins(12, 0, 12, 12)
+        btns.setContentsMargins(12, 10, 12, 14)
         btns.setSpacing(8)
 
         self.btn_install = QPushButton("INSTALAR")
@@ -239,17 +290,144 @@ class GameCard(QWidget):
 
         self.btn_req.clicked.connect(self.show_requirements)
 
+        self.btn_uninstall = QPushButton("DESINSTALAR")
+        self.btn_uninstall.setStyleSheet("""
+        QPushButton {
+            background-color: rgba(255, 85, 85, 0.12);
+            border: 1px solid #ff5555;
+            color: #ffb3b3;
+            font-size: 15px;
+            border-radius: 10px;
+            padding: 10px;
+        }
+        QPushButton:hover {
+            background-color: #ff5555;
+            color: #0d0b1f;
+        }
+        """)
+        self.btn_uninstall.clicked.connect(self.uninstall_game)
+
         btns.addWidget(self.btn_install)
         btns.addWidget(self.btn_req)
+        btns.addWidget(self.btn_uninstall)
+
+        # ✅ NÃO deixar o layout mudar:
+        self.btn_uninstall.setEnabled(False)
+        self.btn_uninstall.setText("DESINSTALAR")
+        self.btn_uninstall.setEnabled(False)
+        self.btn_uninstall.setStyleSheet("""
+        QPushButton {
+            background-color: rgba(255, 85, 85, 0.12);
+            border: 1px solid #ff5555;
+            color: #ffb3b3;
+            font-size: 15px;
+            border-radius: 10px;
+            padding: 10px;
+        }
+        QPushButton:hover {
+            background-color: #ff5555;
+            color: #0d0b1f;
+        }
+        QPushButton:disabled {
+            background-color: rgba(255, 85, 85, 0.06);
+            border: 1px solid rgba(255, 85, 85, 0.35);
+            color: rgba(255, 179, 179, 0.55);
+        }
+        """)
 
         root.addLayout(btns)
 
         if self.is_installed():
             self.set_playable()
 
+
     # =========================
     # MÉTODOS AUXILIARES
     # =========================
+
+    def _update_title_text(self):
+        txt = self.game_title.upper()
+
+        fm = QFontMetrics(self.title_label.font())
+        # largura útil: remove padding (12 + 12)
+        max_w = max(10, self.title_label.width() - 24)
+
+        elided = fm.elidedText(txt, Qt.TextElideMode.ElideRight, max_w)
+        self.title_label.setText(elided)
+
+    def _plano_ativo(self) -> bool:
+        """
+        1) Usa o estado salvo em sessão (plan_active + expires_at).
+        2) Se tiver token, tenta confirmar no backend.
+        3) Se o backend falhar (endpoint/timeout), NÃO derruba a sessão.
+        """
+
+        # -------- 1) valida sessão local --------
+        plan_active = bool((self.user_info or {}).get("plan_active"))
+        expires_at = (self.user_info or {}).get("expires_at")
+
+        if plan_active and expires_at:
+            try:
+                from datetime import datetime, timezone
+                exp_str = str(expires_at).replace("Z", "+00:00")
+                exp = datetime.fromisoformat(exp_str)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                if exp <= now:
+                    # expirou
+                    self.user_info["plan_active"] = False
+                    return False
+            except Exception:
+                # se der erro no parse, não mata o acesso
+                pass
+
+        if plan_active and not expires_at:
+            # permanente
+            return True
+
+        # se sessão diz que não está ativo, ainda podemos confirmar no backend
+        token = (self.user_info or {}).get("token", "").strip()
+        if not token:
+            return False
+
+        # -------- 2) confirma backend (flexível) --------
+        try:
+            r = requests.get(
+                f"{API_BASE}/token/status",  # ✅ TROQUE aqui para o endpoint real do seu backend
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10
+            )
+
+            if r.status_code != 200:
+                # se backend não confirmar, mantém sessão como estava (não bloqueia por erro)
+                return plan_active
+
+            data = r.json() if "application/json" in (r.headers.get("content-type", "")) else {}
+
+            # ✅ tenta achar qualquer formato comum
+            if data.get("plan_active") is True:
+                self.user_info["plan_active"] = True
+                self.user_info["plan"] = data.get("plan", self.user_info.get("plan"))
+                self.user_info["expires_at"] = data.get("expires_at", self.user_info.get("expires_at"))
+                return True
+
+            if data.get("ativo") is True:
+                self.user_info["plan_active"] = True
+                return True
+
+            if str(data.get("status", "")).upper() == "ATIVO":
+                self.user_info["plan_active"] = True
+                return True
+
+            # se backend disser não ativo:
+            self.user_info["plan_active"] = False
+            return False
+
+        except Exception:
+            # se cair a internet/endpoint errado: usa o que está salvo
+            return plan_active
+
     def get_image_data(self, url):
         if not url:
             return b""
@@ -337,11 +515,99 @@ class GameCard(QWidget):
 
         self.image_label.setPixmap(out)
 
+    def _show_requirements_dialog(self, title: str, text: str):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setFixedSize(760, 520)
+        dlg.setStyleSheet("""
+            QDialog {
+                background-color: #0d0b1f;
+                color: #b9a9ff;
+                border: 2px solid #2a245f;
+                border-radius: 18px;
+            }
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        # Caixa de texto com scroll
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setText(text)
+        box.setFont(QFont("VT323", 18))
+        box.setStyleSheet("""
+            QTextEdit {
+                background-color: #120f2a;
+                border: 2px solid #2a245f;
+                border-radius: 14px;
+                padding: 12px;
+                color: #e0d9ff;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #0d0b1f;
+                width: 12px;
+                margin: 8px 4px 8px 4px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #836FFF;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #9a7dff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        layout.addWidget(box)
+
+        # Botão OK
+        ok_btn = QPushButton("OK")
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok_btn.setFixedHeight(46)
+        ok_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #836FFF,
+                    stop:1 #4cc3ff
+                );
+                color: #0d0b1f;
+                font-size: 20px;
+                border-radius: 14px;
+                padding: 8px 18px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #9a7dff,
+                    stop:1 #6fd4ff
+                );
+            }
+        """)
+        ok_btn.clicked.connect(dlg.accept)
+        layout.addWidget(ok_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        dlg.exec()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_cover_pixmap()
+        if hasattr(self, "title_label"):
+            self._update_title_text()
 
     def install_game(self):
+
+        uid = (self.user_info or {}).get("id")
+        if not uid:
+            QMessageBox.warning(self, "Sessão inválida", "Usuário sem ID válido. Faça login novamente.")
+            return
         # se já está instalado: jogar
         if self.is_installed():
             self.play_game()
@@ -376,83 +642,222 @@ class GameCard(QWidget):
         # aqui o downloader já tentou detectar exe e proteger
         exe_rel = getattr(signals, "exe_relpath", "") or ""
         exe_enc = getattr(signals, "exe_enc_path", "") or ""
+        print("install_dir:", signals.install_dir)
+        print("exe_relpath:", signals.exe_relpath)
+        print("exe_enc_path:", signals.exe_enc_path)
 
         # salva no instalados.json
         data = load_installed()
         data[self.game_title] = {
             "install_dir": install_dir,
-            "exe": exe_rel,  # caminho relativo do exe original (que foi removido)
-            "exe_enc": exe_enc,  # caminho do arquivo criptografado
+            "exe": exe_rel,
+            "exe_enc": exe_enc,
             "capa_url": self.image_url or "",
-            "genero": self.genres or []
+            "genero": self.genres or [],
+            "descricao": self.descricao or ""  # ✅
         }
         save_installed(data)
 
         self.set_playable()
+        self.btn_uninstall.setVisible(True)
         QMessageBox.information(self, "Sucesso", f"{self.game_title} instalado com sucesso!")
+        self.btn_uninstall.setVisible(True)
+
+    def uninstall_game(self):
+        data = load_installed()
+        info = data.get(self.game_title) or {}
+        install_dir = info.get("install_dir", "")
+
+        resp = QMessageBox.question(
+            self,
+            "Confirmar desinstalação",
+            f"Deseja desinstalar '{self.game_title}'?\nIsso removerá os arquivos do jogo.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+
+        # trava botões enquanto desinstala
+        self.btn_install.setEnabled(False)
+        self.btn_req.setEnabled(False)
+        self.btn_uninstall.setEnabled(False)
+
+        try:
+            # remove pasta do jogo
+            if install_dir and os.path.isdir(install_dir):
+                import shutil
+                shutil.rmtree(install_dir, ignore_errors=True)
+
+            # remove do instalados.json
+            if self.game_title in data:
+                del data[self.game_title]
+                save_installed(data)
+
+            # ===== VOLTA BOTÃO PRINCIPAL PARA INSTALAR =====
+            self.btn_install.setText("INSTALAR")
+            self.btn_install.setEnabled(True)
+            self.btn_install.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #836FFF,
+                    stop:1 #4cc3ff
+                );
+                color: #0d0b1f;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 12px;
+                padding: 12px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #9a7dff,
+                    stop:1 #6fd4ff
+                );
+            }
+            """)
+
+            try:
+                self.btn_install.clicked.disconnect()
+            except Exception:
+                pass
+            self.btn_install.clicked.connect(self.install_game)
+
+            # ===== REQUISITOS VOLTA NORMAL =====
+            self.btn_req.setEnabled(True)
+
+            # ===== DESINSTALAR: VOLTA PARA "APAGADO" (SEM SUMIR) =====
+            self.btn_uninstall.setEnabled(False)
+            self.btn_uninstall.setCursor(Qt.CursorShape.ArrowCursor)
+            self.btn_uninstall.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 85, 85, 0.06);
+                border: 1px solid rgba(255, 85, 85, 0.35);
+                color: rgba(255, 179, 179, 0.55);
+                font-size: 15px;
+                border-radius: 10px;
+                padding: 10px;
+            }
+            """)
+
+            QMessageBox.information(self, "Concluído", f"{self.game_title} foi desinstalado.")
+
+        except Exception as e:
+            # se falhar, reabilita tudo
+            self.btn_install.setEnabled(True)
+            self.btn_req.setEnabled(True)
+
+            # tenta voltar desinstalar ao estado correto (se ainda estiver instalado)
+            if self.is_installed():
+                self.set_playable()
+            else:
+                self.btn_uninstall.setEnabled(False)
+                self.btn_uninstall.setCursor(Qt.CursorShape.ArrowCursor)
+                self.btn_uninstall.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 85, 85, 0.06);
+                    border: 1px solid rgba(255, 85, 85, 0.35);
+                    color: rgba(255, 179, 179, 0.55);
+                    font-size: 15px;
+                    border-radius: 10px;
+                    padding: 10px;
+                }
+                """)
+
+            QMessageBox.warning(self, "Erro", f"Não foi possível desinstalar:\n{e}")
 
     def play_game(self):
+        import subprocess
+        import time
+        import threading
+        import os
+
+        if not self._plano_ativo():
+            QMessageBox.warning(self, "Acesso negado", "Seu acesso não está ativo.")
+            return
+
         data = load_installed()
         info = data.get(self.game_title) or {}
 
-        install_dir = info.get("install_dir", "")
+        install_dir = os.path.normpath((info.get("install_dir") or "").strip()).rstrip("\\/")
         if not install_dir or not os.path.isdir(install_dir):
-            QMessageBox.warning(self, "Erro", "Jogo não encontrado. Reinstale.")
-            self.btn_install.setText("INSTALAR")
+            QMessageBox.warning(self, "Erro", f"Pasta do jogo não encontrada:\n{install_dir}")
             return
 
-        exe_rel = (info.get("exe") or "").strip()
-        exe_enc = (info.get("exe_enc") or "").strip()
+        exe_rel = (info.get("exe") or "").strip()  # ex: "Raft.exe" ou "Raft\\Raft.exe"
+        exe_enc = (info.get("exe_enc") or "").strip()  # caminho do .enc
 
-        # 1) se ainda existir exe (caso antigo), tenta abrir direto
-        if exe_rel:
-            exe_path = os.path.join(install_dir, exe_rel)
-            if os.path.exists(exe_path):
-                os.startfile(exe_path)
+        if not exe_rel and exe_enc:
+            # fallback se por algum motivo não salvou exe_rel
+            exe_rel = find_best_exe(install_dir)
+
+        if not exe_rel:
+            QMessageBox.warning(self, "Erro", "Não encontrei o executável do jogo (exe).")
+            return
+
+        exe_path = os.path.normpath(os.path.join(install_dir, exe_rel))
+        exe_dir = os.path.dirname(exe_path)
+
+        def _run_exe(real_exe_path: str):
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+            return subprocess.Popen(
+                [real_exe_path],
+                cwd=os.path.dirname(real_exe_path),  # ✅ CWD correto
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                close_fds=True
+            )
+
+        # ✅ 1) Se tem exe protegido: descriptografa SEM trocar nome (Unity precisa do nome certo)
+        if exe_enc and os.path.exists(exe_enc):
+            try:
+                # ✅ Descriptografa para o exe real do jogo (ex: Raft.exe)
+                decrypt_file_to(exe_enc, exe_path)
+
+                p = _run_exe(exe_path)
+
+                # ✅ Opcional recomendado: limpar/reproteger quando fechar
+                def _cleanup_when_exit():
+                    try:
+                        p.wait()
+                    finally:
+                        try:
+                            # aqui você escolhe: apagar exe descriptografado
+                            # (ou recriptografar de volta se você tiver função)
+                            if os.path.exists(exe_path):
+                                os.remove(exe_path)
+                        except Exception:
+                            pass
+
+                threading.Thread(target=_cleanup_when_exit, daemon=True).start()
                 return
 
-        # 2) se exe foi protegido: descriptografa para temp e executa
-        if exe_enc and os.path.exists(exe_enc):
-            run_dir = os.path.join(os.getenv("LOCALAPPDATA") or os.path.expanduser("~"), "PrimeX", "run_cache",
-                                   self.game_title)
-            os.makedirs(run_dir, exist_ok=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Erro", f"Não foi possível iniciar o jogo (protegido):\n{e}")
+                return
 
-            # nome do exe temp
-            temp_exe = os.path.join(run_dir, os.path.basename(exe_rel) if exe_rel else f"{self.game_title}.exe")
-
+        # ✅ 2) Sem proteção (modo antigo): roda exe normal
+        if os.path.exists(exe_path):
             try:
-                decrypt_file_to(exe_enc, temp_exe)
-                os.startfile(temp_exe)
+                _run_exe(exe_path)
                 return
             except Exception as e:
-                QMessageBox.warning(self, "Erro", f"Não foi possível iniciar o jogo:\n{e}")
+                QMessageBox.warning(self, "Erro ao iniciar", f"Falhou ao abrir:\n{exe_path}\n\nErro:\n{e}")
                 return
 
-        # 3) fallback: tenta detectar exe normal (casos antigos)
-        exe_rel = find_best_exe(install_dir)
-        if exe_rel:
-            exe_path = os.path.join(install_dir, exe_rel)
-            if os.path.exists(exe_path):
-                # salva pra não precisar detectar toda hora
-                info["exe"] = exe_rel
-                data[self.game_title] = info
-                save_installed(data)
-
-                os.startfile(exe_path)
-                return
-
-        QMessageBox.information(self, "Atenção",
-                                "Não consegui localizar o executável automaticamente. Abrindo a pasta.")
-        os.startfile(install_dir)
+        QMessageBox.warning(self, "Erro", f"Executável não encontrado:\n{exe_path}")
 
     def show_requirements(self):
-        QMessageBox.information(
-            self,
-            "Requisitos",
-            "Requisitos do jogo ainda não definidos."
-        )
+        texto = (self.descricao or "").strip()
+        if not texto:
+            texto = "Descrição / requisitos não informados."
 
+        # melhora a leitura: garante quebras e espaços
+        texto = texto.replace("\\n", "\n").strip()
 
+        self._show_requirements_dialog("Requisitos", texto)
 
     def is_installed(self):
         data = load_installed()
@@ -464,7 +869,9 @@ class GameCard(QWidget):
         return bool(install_dir) and os.path.isdir(install_dir)
 
     def set_playable(self):
+        # ===== BOTÃO PRINCIPAL: JOGAR =====
         self.btn_install.setText("JOGAR")
+        self.btn_install.setEnabled(True)
         self.btn_install.setStyleSheet("""
         QPushButton {
             background: qlineargradient(
@@ -474,16 +881,85 @@ class GameCard(QWidget):
             );
             color: #0d0b1f;
             font-size: 18px;
-            border-radius: 10px;
-            padding: 10px;
+            font-weight: bold;
+            border-radius: 12px;
+            padding: 12px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(
+                x1:0, y1:0, x2:1, y2:0,
+                stop:0 #6fd4ff,
+                stop:1 #33ffbb
+            );
         }
         """)
 
+        # garante que clique vai para play_game (sem acumular sinais)
         try:
             self.btn_install.clicked.disconnect()
         except Exception:
             pass
         self.btn_install.clicked.connect(self.play_game)
+
+        # ===== DESINSTALAR: ATIVADO (SEM MEXER EM VISIBILIDADE) =====
+        self.btn_uninstall.setEnabled(True)
+        self.btn_uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_uninstall.setStyleSheet("""
+        QPushButton {
+            background-color: rgba(255, 85, 85, 0.12);
+            border: 1px solid #ff5555;
+            color: #ffb3b3;
+            font-size: 15px;
+            border-radius: 10px;
+            padding: 10px;
+        }
+        QPushButton:hover {
+            background-color: #ff5555;
+            color: #0d0b1f;
+        }
+        QPushButton:pressed {
+            background-color: #ff7777;
+        }
+        """)
+
+        def load_installed():
+            if not os.path.exists(JSON_INSTALLED):
+                return {}
+
+            try:
+                with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # ✅ formato correto
+                if isinstance(data, dict):
+                    return data
+
+                # ✅ formato antigo: lista
+                if isinstance(data, list):
+                    converted = {}
+                    for item in data:
+                        if isinstance(item, dict):
+                            nome = (item.get("nome") or item.get("title") or "").strip()
+                            if not nome:
+                                continue
+                            converted[nome] = {
+                                "install_dir": item.get("install_dir", ""),
+                                "exe": item.get("exe", ""),
+                                "exe_enc": item.get("exe_enc", ""),
+                                "capa_url": item.get("capa_url", ""),
+                                "genero": item.get("genero", []),
+                                "descricao": item.get("descricao", "")
+                            }
+
+                    save_installed(converted)  # ✅ salva convertido
+                    return converted
+
+                return {}
+
+            except Exception:
+                return {}
+
+
 
 
 # =========================
@@ -500,7 +976,18 @@ class MainWindow(QWidget):
                 font-family: 'VT323';
             }
         """)
-        self.user_info = usuario_info or {"id": "usuario123", "nome": "Usuário", "is_admin": False, "token": ""}
+        self.user_info = dict(usuario_info or {})
+
+        # ✅ mescla sessão persistida por cima
+        sess = load_session()
+        if isinstance(sess, dict):
+            self.user_info.update(sess)
+
+        # ✅ garante chaves mínimas sem inventar id fake
+        self.user_info.setdefault("id", "")
+        self.user_info.setdefault("nome", "Usuário")
+        self.user_info.setdefault("is_admin", False)
+        self.user_info.setdefault("token", "")
 
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(20, 20, 20, 20)
@@ -549,12 +1036,38 @@ QPushButton:hover {
         self.main_layout.addWidget(self.filter_bar)
 
         # Grid
+        # ===== SCROLL + GRID =====
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background: transparent; }
+            QScrollBar:vertical {
+                border: none;
+                background: #0d0b1f;
+                width: 12px;
+                margin: 8px 4px 8px 4px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #836FFF;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover { background: #9a7dff; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+
         self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(20)
-        self.grid_layout.setContentsMargins(0, 5, 0, 0)
-        self.grid_widget.setLayout(self.grid_layout)
-        self.main_layout.addWidget(self.grid_widget)
+        self.grid_widget.setStyleSheet("background: transparent;")
+
+        self.grid_layout = QGridLayout(self.grid_widget)
+        self.grid_layout.setHorizontalSpacing(20)
+        self.grid_layout.setVerticalSpacing(50)  # seu espaçamento atual
+        self.grid_layout.setContentsMargins(0, 5, 0, 25)  # um respiro embaixo
+
+        self.scroll_area.setWidget(self.grid_widget)
+        self.main_layout.addWidget(self.scroll_area)
 
         self.setLayout(self.main_layout)
         self.setMinimumSize(720, 480)
@@ -582,18 +1095,30 @@ QPushButton:hover {
         self.close()
 
     def load_games(self):
-        import requests
+        uid = self.user_info.get("id")
+        if not uid:
+            QMessageBox.warning(
+                self,
+                "Sessão inválida",
+                "Seu login não está carregando o ID do usuário.\nFaça login novamente."
+            )
+            return
+
         try:
-            response = requests.get(f"{API_BASE}/admin/listar_jogos")
+            response = requests.get(f"{API_BASE}/admin/listar_jogos", timeout=10)
+            response.raise_for_status()
             jogos_data = response.json().get("jogos", [])
-        except:
+        except Exception as e:
+            QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{e}")
             jogos_data = []
 
+        # limpa grid
         for i in reversed(range(self.grid_layout.count())):
-            widget_to_remove = self.grid_layout.itemAt(i).widget()
-            if widget_to_remove:
-                self.grid_layout.removeWidget(widget_to_remove)
-                widget_to_remove.setParent(None)
+            item = self.grid_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w:
+                self.grid_layout.removeWidget(w)
+                w.setParent(None)
 
         self.cards.clear()
 
@@ -602,9 +1127,10 @@ QPushButton:hover {
                 image_url=jogo.get("capa_url", ""),
                 title_top=jogo.get("nome", ""),
                 title_bottom="",
-                download_url=f"{API_BASE}/jogos/{jogo['id']}/download?user_id={self.user_info['id']}",
+                download_url=f"{API_BASE}/jogos/{jogo['id']}/download?user_id={uid}",
                 genres=jogo.get("genero", []),
-                user_info=self.user_info
+                user_info=self.user_info,
+                descricao=jogo.get("descricao", "")
             )
 
             self.cards.append(card)
@@ -617,7 +1143,7 @@ QPushButton:hover {
             row = idx // 5
             col = idx % 5
             placeholder = QLabel()
-            placeholder.setFixedSize(280, 390)
+            placeholder.setFixedSize(260, 485)
             placeholder.setStyleSheet("background-color: transparent; border: none;")
             self.grid_layout.addWidget(placeholder, row, col)
 

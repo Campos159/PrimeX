@@ -12,9 +12,11 @@ from PyQt6.QtGui import QFontDatabase
 from navbar import NavBar
 from profile import ProfilePage
 from filter_bar import FilterBar
+from utils import resource_path
 
 # IMPORTA O GameCard da explore_page (assim o botão "JOGAR" usa a mesma lógica)
 from explore_page import GameCard
+
 
 
 # =========================
@@ -39,7 +41,9 @@ class InstaladosPage(QWidget):
             "id": "usuario123",
             "nome": "Usuário",
             "is_admin": False,
-            "token": ""
+            "token": "",
+            # opcional: se você usa plano_status pra download, pode manter
+            # "plano_status": "ATIVO"
         }
 
         self.setWindowTitle("PrimeX • Instalados")
@@ -156,7 +160,8 @@ class InstaladosPage(QWidget):
         if not os.path.exists(JSON_INSTALLED):
             return
 
-        # Agora: instalados.json é um DICT { "Nome do Jogo": {install_dir, exe} }
+        # instalados.json é dict:
+        # { "Nome do Jogo": {install_dir, exe, exe_enc, capa_url, genero} }
         try:
             with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -165,26 +170,29 @@ class InstaladosPage(QWidget):
         except Exception:
             data = {}
 
-        # filtra só os que realmente existem no disco
-        jogos = []
+        # monta lista apenas dos válidos (pasta existe)
+        valid_items = []
         for game_title, info in data.items():
-            install_dir = (info or {}).get("install_dir", "")
+            info = info or {}
+            install_dir = (info.get("install_dir") or "").strip()
             if install_dir and os.path.isdir(install_dir):
-                jogos.append(game_title)
+                valid_items.append((game_title, info))
 
-        # cria cards
-        for idx, (game_title, info) in enumerate(data.items()):
-            install_dir = (info or {}).get("install_dir", "")
-            if not install_dir or not os.path.isdir(install_dir):
-                continue
+        # cria cards só para válidos
+        for idx, (game_title, info) in enumerate(valid_items):
+            capa_url = (info.get("capa_url") or "").strip()
+            genero = info.get("genero") or []
 
             card = GameCard(
-                image_url=(info or {}).get("capa_url", ""),
+                image_url=capa_url,
                 title_top=game_title,
                 title_bottom="",
-                download_url="",
-                genres=(info or {}).get("genero", [])
+                download_url="",  # não usado em instalados
+                genres=genero,
+                user_info=self.user_info
             )
+
+            # força estado JOGAR (usa a lógica do GameCard, inclusive exe protegido)
             card.set_playable()
 
             self.cards.append(card)
@@ -192,6 +200,16 @@ class InstaladosPage(QWidget):
             row = idx // 5
             col = idx % 5
             self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # placeholders pra manter layout (opcional)
+        total_slots = max(5, len(valid_items))
+        for idx in range(len(valid_items), total_slots):
+            row = idx // 5
+            col = idx % 5
+            placeholder = QLabel()
+            placeholder.setFixedSize(280, 390)
+            placeholder.setStyleSheet("background-color: transparent; border: none;")
+            self.grid_layout.addWidget(placeholder, row, col)
 
     # =========================
     # FILTERS

@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['launcher.py'],
+    ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), ('..\\app', 'app')],
+    datas=[('logos', 'logos'), ('avatars', 'avatars'), ('fonts', 'fonts')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['logos\\primex_ico.ico'],
 )
