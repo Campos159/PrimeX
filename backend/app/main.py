@@ -265,7 +265,7 @@ def normalizar_dropbox_path(p: str) -> str:
     return p
 
 DROPBOX_APP_FOLDER_NAME = os.getenv("DROPBOX_APP_FOLDER_NAME", "")  # ex: "PrimeX"
-DROPBOX_BASE_DIR = "/jogos"  # sua pasta lógica padrão
+DROPBOX_BASE_DIR = "/jogos/jogos"  # sua pasta lógica padrão
 
 def dropbox_base_dir() -> str:
     # Se seu app for "App folder" no Dropbox, o root real vira /Apps/<NOME_DO_APP>
@@ -648,10 +648,14 @@ def db_jogos(db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+import urllib.parse
+
 @app.get("/admin/dropbox/exists")
 def db_exists(path: str, db: Session = Depends(get_db)):
     dbx = get_dropbox_client(db)
     try:
+        path = urllib.parse.unquote(path)   # converte %2F em /
+        path = dropbox_full_path(path)      # aplica base correta
         md = dbx.files_get_metadata(path)
         return {"ok": True, "name": md.name, "path": md.path_display}
     except Exception as e:
