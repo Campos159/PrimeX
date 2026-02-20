@@ -650,12 +650,14 @@ def db_jogos(db: Session = Depends(get_db)):
 
 import urllib.parse
 
+import urllib.parse
+
 @app.get("/admin/dropbox/exists")
 def db_exists(path: str, db: Session = Depends(get_db)):
     dbx = get_dropbox_client(db)
     try:
         path = urllib.parse.unquote(path)   # converte %2F em /
-        path = dropbox_full_path(path)      # aplica base correta
+        path = dropbox_full_path(path)      # aplica a base correta (/jogos/jogos ou /Apps/... etc)
         md = dbx.files_get_metadata(path)
         return {"ok": True, "name": md.name, "path": md.path_display}
     except Exception as e:
