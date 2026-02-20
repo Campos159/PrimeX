@@ -246,10 +246,6 @@ def usuario_tem_plano_ativo(user_id: int, db: Session):
 # CONFIGURAÇÕES DO DROPBOX
 # ================================
 DROPBOX_FOLDER = "/jogos"
-DROPBOX_TOKEN = os.getenv("DROPBOX_TOKEN", "")
-if not DROPBOX_TOKEN:
-    print("❌ DROPBOX_TOKEN não configurado")
-dbx = dropbox.Dropbox(DROPBOX_TOKEN, timeout=120)
 
 def normalizar_dropbox_path(p: str) -> str:
     p = (p or "").strip()
@@ -267,6 +263,31 @@ def normalizar_dropbox_path(p: str) -> str:
         p = "/" + p
 
     return p
+
+DROPBOX_APP_FOLDER_NAME = os.getenv("DROPBOX_APP_FOLDER_NAME", "")  # ex: "PrimeX"
+DROPBOX_BASE_DIR = "/jogos"  # sua pasta lógica padrão
+
+def dropbox_base_dir() -> str:
+    # Se seu app for "App folder" no Dropbox, o root real vira /Apps/<NOME_DO_APP>
+    if DROPBOX_APP_FOLDER_NAME:
+        return f"/Apps/{DROPBOX_APP_FOLDER_NAME}{DROPBOX_BASE_DIR}"
+    return DROPBOX_BASE_DIR
+
+def dropbox_full_path(p: str) -> str:
+    # Sempre converte para o caminho real no token
+    p = normalizar_dropbox_path(p)
+
+    base = dropbox_base_dir().rstrip("/")
+
+    # Se já veio apontando pra Apps ou pro base, não mexe
+    if p.startswith("/Apps/") or p.startswith(base + "/") or p == base:
+        return p
+
+    # Se veio como /jogos/arquivo.zip, remove /jogos do começo e junta no base real
+    if p.startswith("/jogos/"):
+        p = p[len("/jogos"):]  # vira /arquivo.zip
+
+    return base + p
 
 def get_dropbox_client(db: Session) -> dropbox.Dropbox:
     creds = db.query(DropboxCreds).order_by(DropboxCreds.id.desc()).first()
@@ -384,7 +405,7 @@ def deletar_jogo(jogo_id: int, db: Session = Depends(get_db)):
 # ROTAS - TOKENS
 # ================================
 durations = {
-    "Teste Gratuito": timedelta(hours=3),
+    "Teste Gratuito": timedelta(hours=24),
     "Mensal": timedelta(days=30),
     "Trimestral": timedelta(days=90),
     "Anual": timedelta(days=365),
@@ -555,9 +576,7 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
 
     # agora jogo.dropbox_token deve ser PATH: /jogos/arquivo.zip
-    dropbox_path = (jogo.dropbox_token or "").strip()
-    if not dropbox_path.startswith("/"):
-        dropbox_path = "/" + dropbox_path
+    dropbox_path = dropbox_full_path(jogo.dropbox_token)
 
     try:
         # baixa do dropbox via API oficial (não link público)
@@ -594,7 +613,7 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
 def listar_pasta_dropbox(db: Session = Depends(get_db)):
     dbx = get_dropbox_client(db)
     try:
-        res = dbx.files_list_folder("/jogos")
+        res = dbx.files_list_folder(dropbox_base_dir())
         return {
             "arquivos": [
                 {
@@ -615,12 +634,6 @@ def dropbox_root(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/admin/dropbox/root")
-def db_root(db: Session = Depends(get_db)):
-    dbx = get_dropbox_client(db)
-    r = dbx.files_list_folder("")  # root do token
-    return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
-
 from dropbox.exceptions import ApiError
 from fastapi import HTTPException
 
@@ -628,7 +641,7 @@ from fastapi import HTTPException
 def db_jogos(db: Session = Depends(get_db)):
     dbx = get_dropbox_client(db)
     try:
-        r = dbx.files_list_folder("/jogos")
+        r = dbx.files_list_folder(dropbox_base_dir())
         return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
     except ApiError as e:
         # devolve mensagem do Dropbox em vez de 500 genérico
