@@ -644,6 +644,12 @@ def db_exists(path: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/admin/dropbox/apps")
+def list_apps_root(db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    r = dbx.files_list_folder(path="/Apps")
+    return {"entries": [{"name": e.name, "path": e.path_lower} for e in r.entries]}
+
 # =======================
 # ROTAS - Token
 # =======================
