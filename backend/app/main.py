@@ -621,11 +621,28 @@ def db_root(db: Session = Depends(get_db)):
     r = dbx.files_list_folder("")  # root do token
     return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
 
+from dropbox.exceptions import ApiError
+from fastapi import HTTPException
+
 @app.get("/admin/dropbox/jogos")
 def db_jogos(db: Session = Depends(get_db)):
     dbx = get_dropbox_client(db)
-    r = dbx.files_list_folder("/jogos")
-    return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
+    try:
+        r = dbx.files_list_folder("/jogos")
+        return {"entries": [{"name": e.name, "path": e.path_display} for e in r.entries]}
+    except ApiError as e:
+        # devolve mensagem do Dropbox em vez de 500 genérico
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/admin/dropbox/exists")
+def db_exists(path: str, db: Session = Depends(get_db)):
+    dbx = get_dropbox_client(db)
+    try:
+        md = dbx.files_get_metadata(path)
+        return {"ok": True, "name": md.name, "path": md.path_display}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # =======================
 # ROTAS - Token
