@@ -637,7 +637,7 @@ class GameCard(QWidget):
         signals.error.connect(on_error)
 
     def _on_install_finished(self, signals):
-        install_dir = signals.install_dir or os.path.join(GAMES_DIR, self.game_title)
+        install_dir = os.path.normpath(signals.install_dir or os.path.join(GAMES_DIR, self.game_title))
 
         # aqui o downloader já tentou detectar exe e proteger
         exe_rel = getattr(signals, "exe_relpath", "") or ""
@@ -664,9 +664,12 @@ class GameCard(QWidget):
         self.btn_uninstall.setVisible(True)
 
     def uninstall_game(self):
+        import shutil
+        import stat
+
         data = load_installed()
         info = data.get(self.game_title) or {}
-        install_dir = info.get("install_dir", "")
+        install_dir = os.path.normpath((info.get("install_dir") or "").strip())
 
         resp = QMessageBox.question(
             self,
@@ -682,52 +685,41 @@ class GameCard(QWidget):
         self.btn_req.setEnabled(False)
         self.btn_uninstall.setEnabled(False)
 
+        def _on_rm_error(func, path, exc_info):
+            # tenta remover read-only e repetir
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception:
+                pass
+
         try:
             # remove pasta do jogo
             if install_dir and os.path.isdir(install_dir):
-                import shutil
-                shutil.rmtree(install_dir, ignore_errors=True)
+                shutil.rmtree(install_dir, onerror=_on_rm_error)  # ✅ sem ignore_errors
+
+                # se ainda existir, falhou (mostra)
+                if os.path.isdir(install_dir):
+                    raise PermissionError(f"Não foi possível remover completamente:\n{install_dir}")
 
             # remove do instalados.json
             if self.game_title in data:
                 del data[self.game_title]
                 save_installed(data)
 
-            # ===== VOLTA BOTÃO PRINCIPAL PARA INSTALAR =====
+            # volta botão principal para instalar
             self.btn_install.setText("INSTALAR")
             self.btn_install.setEnabled(True)
-            self.btn_install.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #836FFF,
-                    stop:1 #4cc3ff
-                );
-                color: #0d0b1f;
-                font-size: 18px;
-                font-weight: bold;
-                border-radius: 12px;
-                padding: 12px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #9a7dff,
-                    stop:1 #6fd4ff
-                );
-            }
-            """)
-
             try:
                 self.btn_install.clicked.disconnect()
             except Exception:
                 pass
             self.btn_install.clicked.connect(self.install_game)
 
-            # ===== REQUISITOS VOLTA NORMAL =====
+            # requisitos volta normal
             self.btn_req.setEnabled(True)
 
-            # ===== DESINSTALAR: VOLTA PARA "APAGADO" (SEM SUMIR) =====
+            # desinstalar: volta desativado
             self.btn_uninstall.setEnabled(False)
             self.btn_uninstall.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_uninstall.setStyleSheet("""
@@ -743,27 +735,29 @@ class GameCard(QWidget):
 
             QMessageBox.information(self, "Concluído", f"{self.game_title} foi desinstalado.")
 
+        except PermissionError:
+            # reabilita botões
+            self.btn_install.setEnabled(True)
+            self.btn_req.setEnabled(True)
+            self.btn_uninstall.setEnabled(True)
+
+            QMessageBox.warning(
+                self,
+                "Permissão negada",
+                "Não consegui remover os arquivos do jogo.\n\n"
+                "Feche o jogo/patch e execute o PrimeX como Administrador, depois tente novamente."
+            )
+
         except Exception as e:
             # se falhar, reabilita tudo
             self.btn_install.setEnabled(True)
             self.btn_req.setEnabled(True)
 
-            # tenta voltar desinstalar ao estado correto (se ainda estiver instalado)
             if self.is_installed():
                 self.set_playable()
             else:
                 self.btn_uninstall.setEnabled(False)
                 self.btn_uninstall.setCursor(Qt.CursorShape.ArrowCursor)
-                self.btn_uninstall.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 85, 85, 0.06);
-                    border: 1px solid rgba(255, 85, 85, 0.35);
-                    color: rgba(255, 179, 179, 0.55);
-                    font-size: 15px;
-                    border-radius: 10px;
-                    padding: 10px;
-                }
-                """)
 
             QMessageBox.warning(self, "Erro", f"Não foi possível desinstalar:\n{e}")
 
@@ -800,15 +794,35 @@ class GameCard(QWidget):
         exe_dir = os.path.dirname(exe_path)
 
         def _run_exe(real_exe_path: str):
+            import subprocess
+            import os
+            import ctypes
+
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
 
-            return subprocess.Popen(
-                [real_exe_path],
-                cwd=os.path.dirname(real_exe_path),  # ✅ CWD correto
-                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-                close_fds=True
-            )
+            try:
+                return subprocess.Popen(
+                    [real_exe_path],
+                    cwd=os.path.dirname(real_exe_path),  # ✅ CWD correto
+                    creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                    close_fds=True
+                )
+
+            except OSError as e:
+                # ✅ WinError 740 = requer elevação (admin)
+                if getattr(e, "winerror", None) == 740:
+                    ctypes.windll.shell32.ShellExecuteW(
+                        None,
+                        "runas",  # pede UAC
+                        real_exe_path,  # exe
+                        None,  # argumentos (se tiver, eu ajusto)
+                        os.path.dirname(real_exe_path),  # pasta
+                        1
+                    )
+                    return None
+
+                raise
 
         # ✅ 1) Se tem exe protegido: descriptografa SEM trocar nome (Unity precisa do nome certo)
         if exe_enc and os.path.exists(exe_enc):

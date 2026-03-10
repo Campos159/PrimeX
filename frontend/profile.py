@@ -2,7 +2,7 @@ import sys
 import os
 import httpx
 from datetime import datetime, timezone
-
+from install_config import get_install_root, save_install_root
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
     QFileDialog, QSizePolicy, QLineEdit, QMessageBox, QDialog, QGridLayout
@@ -165,6 +165,30 @@ class ProfilePage(QWidget):
         profile_info_layout.addWidget(self.token_input)
         profile_info_layout.addWidget(self.token_btn)
 
+        self.install_path_label = QLabel(f"Pasta de instalação:\n{get_install_root()}")
+        self.install_path_label.setStyleSheet("font-size: 15px; color: #e0d9ff;")
+
+        self.install_path_btn = QPushButton("Escolher local de instalação")
+        self.install_path_btn.setFixedHeight(34)
+        self.install_path_btn.setFixedWidth(220)
+        self.install_path_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_path_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #836FFF;
+                color: white;
+                border-radius: 8px;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #6f55ff;
+            }
+        """)
+        self.install_path_btn.clicked.connect(self.choose_install_path)
+
+        profile_info_layout.addWidget(self.install_path_label)
+        profile_info_layout.addWidget(self.install_path_btn)
+
         profile_layout.addWidget(self.profile_pic)
         profile_layout.addLayout(profile_info_layout)
 
@@ -179,6 +203,8 @@ class ProfilePage(QWidget):
         # 3) APLICA UI DO PLANO (LENDO SESSÃO)
         # =========================
         self._apply_plan_ui()
+
+
 
     # =========================
     # UI helpers
@@ -322,12 +348,46 @@ class ProfilePage(QWidget):
             dialog.accept()
 
     def change_profile_picture(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Selecionar foto de perfil", "", "Imagens (*.png *.jpg *.jpeg)")
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar foto de perfil",
+            "",
+            "Imagens (*.png *.jpg *.jpeg)"
+        )
         if file_name:
             pixmap = QPixmap(file_name).scaled(
-                130, 130, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+                130, 130,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
             )
             self.profile_pic.setPixmap(pixmap)
+
+    def choose_install_path(self):
+        selected_folder = QFileDialog.getExistingDirectory(
+            self,
+            "Escolher local de instalação",
+            os.path.dirname(get_install_root())
+        )
+
+        if not selected_folder:
+            return
+
+        final_path = os.path.join(selected_folder, "PrimeX", "games")
+        os.makedirs(final_path, exist_ok=True)
+
+        try:
+            os.system(f'attrib +h "{final_path}"')
+        except Exception:
+            pass
+
+        save_install_root(final_path)
+        self.install_path_label.setText(f"Pasta de instalação:\n{final_path}")
+
+        QMessageBox.information(
+            self,
+            "Local de instalação definido",
+            f"Os próximos jogos serão instalados em:\n{final_path}"
+        )
 
     # =========================
     # Token

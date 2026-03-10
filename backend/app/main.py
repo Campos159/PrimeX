@@ -267,10 +267,13 @@ def normalizar_dropbox_path(p: str) -> str:
 DROPBOX_APP_FOLDER_NAME = os.getenv("DROPBOX_APP_FOLDER_NAME", "")  # ex: "PrimeX"
 DROPBOX_BASE_DIR = "/jogos/jogos"  # sua pasta lógica padrão
 
+DROPBOX_MODE = os.getenv("DROPBOX_MODE", "app_folder")  # "app_folder" ou "full"
+
 def dropbox_base_dir() -> str:
-    # Se seu app for "App folder" no Dropbox, o root real vira /Apps/<NOME_DO_APP>
-    if DROPBOX_APP_FOLDER_NAME:
-        return f"/Apps/{DROPBOX_APP_FOLDER_NAME}{DROPBOX_BASE_DIR}"
+    if DROPBOX_MODE == "full":
+        # No modo full, você usa o caminho real da conta
+        return DROPBOX_BASE_DIR
+    # No modo app_folder, o root já é a pasta do app, então base é relativa ao root do app
     return DROPBOX_BASE_DIR
 
 def dropbox_full_path(p: str) -> str:
@@ -595,7 +598,10 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
         return StreamingResponse(
             iterator(),
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(md.size)
+            }
         )
 
     except dropbox.exceptions.ApiError as e:

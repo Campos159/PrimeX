@@ -5,13 +5,15 @@ import requests
 import threading
 import hashlib
 from PyQt6.QtCore import QObject, pyqtSignal
+import shutil
 
 
 # =========================
 # PASTAS (mesmo padrão do explore_page.py)
 # =========================
-BASE_DIR = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
-GAMES_DIR = os.path.join(BASE_DIR, "PrimeX", "games")
+from install_config import get_install_root
+
+GAMES_DIR = get_install_root()
 os.makedirs(GAMES_DIR, exist_ok=True)
 
 
@@ -115,6 +117,24 @@ def find_main_exe(install_dir: str) -> str:
 # =========================
 # DOWNLOAD + EXTRACT
 # =========================
+
+def has_enough_disk_space(target_path: str, required_bytes: int) -> bool:
+    """
+    Verifica se há espaço livre suficiente no disco da pasta alvo.
+    """
+    base_path = target_path
+    while base_path and not os.path.exists(base_path):
+        parent = os.path.dirname(base_path)
+        if parent == base_path:
+            break
+        base_path = parent
+
+    if not base_path or not os.path.exists(base_path):
+        base_path = os.path.abspath(os.sep)
+
+    usage = shutil.disk_usage(base_path)
+    return usage.free >= required_bytes
+
 def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals:
     """
     Baixa e instala o jogo (ZIP) em:
@@ -146,30 +166,68 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
             install_dir = os.path.join(GAMES_DIR, safe_name)
             os.makedirs(install_dir, exist_ok=True)
 
+            try:
+                os.system(f'attrib +h "{GAMES_DIR}"')
+            except Exception:
+                pass
+
+            try:
+                os.system(f'attrib +h "{install_dir}"')
+            except Exception:
+                pass
+
             temp_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip")
 
             # --- download ---
-            with requests.get(download_url, stream=True, timeout=120) as r:
+            with requests.get(download_url, stream=True, timeout=(30, 600)) as r:
                 r.raise_for_status()
 
                 total_length = int(r.headers.get("content-length") or 0)
+
+                # --- verifica espaço antes de baixar ---
+                if total_length <= 0:
+                    raise Exception(
+                        "Não foi possível verificar o tamanho do arquivo. O servidor não enviou Content-Length.")
+
+                required_space = total_length * 2
+                if not has_enough_disk_space(install_dir, required_space):
+                    free_space = shutil.disk_usage(install_dir).free
+                    raise Exception(
+                        f"Espaço insuficiente para instalar o jogo.\n\n"
+                        f"Necessário: {required_space / (1024 ** 3):.2f} GB\n"
+                        f"Disponível: {free_space / (1024 ** 3):.2f} GB"
+                    )
+
                 downloaded = 0
                 last_pct = -1
 
                 with open(temp_zip, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
                         if not chunk:
                             continue
+
                         f.write(chunk)
                         downloaded += len(chunk)
 
                         if total_length > 0:
-                            pct = int(downloaded * 100 / total_length)
+                            pct = min(100, int(downloaded * 100 / total_length))
                             if pct != last_pct:
                                 last_pct = pct
                                 signals.progress.emit(pct)
 
-            # --- valida zip e extrai ---
+            # --- valida tamanho do arquivo baixado ---
+            if total_length > 0:
+                real_size = os.path.getsize(temp_zip)
+                if real_size != total_length:
+                    raise Exception(
+                        f"Download incompleto: esperado {total_length} bytes, recebido {real_size} bytes."
+                    )
+
+            # --- valida se o arquivo é ZIP válido ---
+            if not zipfile.is_zipfile(temp_zip):
+                raise Exception("O arquivo baixado não é um ZIP válido ou está corrompido.")
+
+            # --- extrai ZIP ---
             with zipfile.ZipFile(temp_zip, "r") as zf:
                 zf.extractall(install_dir)
 
