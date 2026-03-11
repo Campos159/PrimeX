@@ -111,15 +111,53 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 # ================================
 # Rota de login
 # ================================
-@app.post("/login", response_model=schemas.UserResponse)
+@app.post("/login")
 def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
     # Autentica usuário usando crud
     db_user = crud.authenticate_user(db, email=user.email, password=user.password)
     if not db_user:
         raise HTTPException(status_code=400, detail="Email ou senha incorretos")
 
-    # Retorna dados do usuário (id, nome, email, is_active, created_at)
-    return db_user
+    now = datetime.utcnow()
+
+    # pega o token/plano ativo mais recente do usuário
+    tok = (
+        db.query(TokenDB)
+        .filter(
+            TokenDB.user_id == db_user.id,
+            TokenDB.active == True
+        )
+        .order_by(TokenDB.activated_at.desc())
+        .first()
+    )
+
+    plan = "Nenhum"
+    plan_active = False
+    expires_at = None
+    token_value = ""
+
+    if tok:
+        token_value = tok.token
+        plan = tok.type
+        expires_at = tok.expires_at.isoformat() if tok.expires_at else None
+
+        if tok.expires_at:
+            plan_active = tok.expires_at > now
+        else:
+            # sem expiração = permanente
+            plan_active = True
+
+    return {
+        "id": db_user.id,
+        "nome": db_user.nome,
+        "email": db_user.email,
+        "is_active": db_user.is_active,
+        "created_at": db_user.created_at.isoformat() if db_user.created_at else None,
+        "token": token_value,
+        "plan": plan,
+        "plan_active": plan_active,
+        "expires_at": expires_at
+    }
 
 # ================================
 # MODELOS ADICIONAIS (Jogos e Tokens)

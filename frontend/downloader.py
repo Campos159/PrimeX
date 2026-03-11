@@ -6,6 +6,9 @@ import threading
 import hashlib
 from PyQt6.QtCore import QObject, pyqtSignal
 import shutil
+from http.client import IncompleteRead
+from urllib3.exceptions import ProtocolError
+from requests.exceptions import ChunkedEncodingError, ConnectionError
 
 
 # =========================
@@ -158,123 +161,152 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
     signals = DownloadSignals()
 
     def run():
-        try:
-            safe_name = "".join(c for c in game_name if c not in r'\/:*?"<>|').strip()
-            if not safe_name:
-                raise Exception("Nome do jogo inválido.")
+        max_attempts = 3
 
-            install_dir = os.path.join(GAMES_DIR, safe_name)
-            os.makedirs(install_dir, exist_ok=True)
-
+        for attempt in range(1, max_attempts + 1):
             try:
-                os.system(f'attrib +h "{GAMES_DIR}"')
-            except Exception:
-                pass
+                safe_name = "".join(c for c in game_name if c not in r'\/:*?"<>|').strip()
+                if not safe_name:
+                    raise Exception("Nome do jogo inválido.")
 
-            try:
-                os.system(f'attrib +h "{install_dir}"')
-            except Exception:
-                pass
+                install_dir = os.path.join(GAMES_DIR, safe_name)
+                os.makedirs(install_dir, exist_ok=True)
 
-            temp_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip")
+                try:
+                    os.system(f'attrib +h "{GAMES_DIR}"')
+                except Exception:
+                    pass
 
-            # --- download ---
-            with requests.get(download_url, stream=True, timeout=(30, 600)) as r:
-                r.raise_for_status()
+                try:
+                    os.system(f'attrib +h "{install_dir}"')
+                except Exception:
+                    pass
 
-                total_length = int(r.headers.get("content-length") or 0)
+                temp_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip")
 
-                # --- verifica espaço antes de baixar ---
-                if total_length <= 0:
-                    raise Exception(
-                        "Não foi possível verificar o tamanho do arquivo. O servidor não enviou Content-Length.")
+                # limpa zip parcial antes de nova tentativa
+                if os.path.exists(temp_zip):
+                    try:
+                        os.remove(temp_zip)
+                    except Exception:
+                        pass
 
-                required_space = total_length * 2
-                if not has_enough_disk_space(install_dir, required_space):
-                    free_space = shutil.disk_usage(install_dir).free
-                    raise Exception(
-                        f"Espaço insuficiente para instalar o jogo.\n\n"
-                        f"Necessário: {required_space / (1024 ** 3):.2f} GB\n"
-                        f"Disponível: {free_space / (1024 ** 3):.2f} GB"
-                    )
+                # --- download ---
+                with requests.get(download_url, stream=True, timeout=(30, 600)) as r:
+                    r.raise_for_status()
 
-                downloaded = 0
-                last_pct = -1
+                    total_length = int(r.headers.get("content-length") or 0)
 
-                with open(temp_zip, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
-                        if not chunk:
-                            continue
+                    # --- verifica espaço antes de baixar ---
+                    if total_length <= 0:
+                        raise Exception(
+                            "Não foi possível verificar o tamanho do arquivo. O servidor não enviou Content-Length.")
 
-                        f.write(chunk)
-                        downloaded += len(chunk)
+                    required_space = total_length * 2
+                    if not has_enough_disk_space(install_dir, required_space):
+                        free_space = shutil.disk_usage(install_dir).free
+                        raise Exception(
+                            f"Espaço insuficiente para instalar o jogo.\n\n"
+                            f"Necessário: {required_space / (1024 ** 3):.2f} GB\n"
+                            f"Disponível: {free_space / (1024 ** 3):.2f} GB"
+                        )
 
-                        if total_length > 0:
+                    downloaded = 0
+                    last_pct = -1
+
+                    with open(temp_zip, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                            if not chunk:
+                                continue
+
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
                             pct = min(100, int(downloaded * 100 / total_length))
                             if pct != last_pct:
                                 last_pct = pct
                                 signals.progress.emit(pct)
 
-            # --- valida tamanho do arquivo baixado ---
-            if total_length > 0:
+                # --- valida tamanho do arquivo baixado ---
                 real_size = os.path.getsize(temp_zip)
                 if real_size != total_length:
                     raise Exception(
                         f"Download incompleto: esperado {total_length} bytes, recebido {real_size} bytes."
                     )
 
-            # --- valida se o arquivo é ZIP válido ---
-            if not zipfile.is_zipfile(temp_zip):
-                raise Exception("O arquivo baixado não é um ZIP válido ou está corrompido.")
+                # --- valida se o arquivo é ZIP válido ---
+                if not zipfile.is_zipfile(temp_zip):
+                    raise Exception("O arquivo baixado não é um ZIP válido ou está corrompido.")
 
-            # --- extrai ZIP ---
-            with zipfile.ZipFile(temp_zip, "r") as zf:
-                zf.extractall(install_dir)
+                # --- extrai ZIP ---
+                with zipfile.ZipFile(temp_zip, "r") as zf:
+                    zf.extractall(install_dir)
 
-            # --- remove zip temporário ---
-            try:
-                os.remove(temp_zip)
-            except Exception:
-                pass
+                # --- remove zip temporário ---
+                try:
+                    os.remove(temp_zip)
+                except Exception:
+                    pass
 
-            # --- detectar exe principal ---
-            main_exe = find_main_exe(install_dir)
-            if not main_exe:
-                # Não trava o jogo se não achar exe (pode ser emulador, etc)
-                # mas devolve infos vazias
+                # --- detectar exe principal ---
+                main_exe = find_main_exe(install_dir)
+                if not main_exe:
+                    signals.install_dir = install_dir
+                    signals.exe_relpath = ""
+                    signals.exe_enc_path = ""
+                    signals.progress.emit(100)
+                    signals.finished.emit()
+                    return
+
+                # --- criptografar e remover exe original ---
+                exe_rel = os.path.relpath(main_exe, install_dir)
+                exe_enc_path = os.path.join(install_dir, exe_rel + ".primexenc")
+
+                os.makedirs(os.path.dirname(exe_enc_path), exist_ok=True)
+
+                encrypt_file_to(main_exe, exe_enc_path)
+
+                try:
+                    os.remove(main_exe)
+                except Exception:
+                    pass
+
+                # --- preencher infos ---
                 signals.install_dir = install_dir
-                signals.exe_relpath = ""
-                signals.exe_enc_path = ""
+                signals.exe_relpath = exe_rel
+                signals.exe_enc_path = exe_enc_path
+
                 signals.progress.emit(100)
                 signals.finished.emit()
                 return
 
-            # --- criptografar e remover exe original ---
-            exe_rel = os.path.relpath(main_exe, install_dir)
-            exe_enc_path = os.path.join(install_dir, exe_rel + ".primexenc")
+            except (IncompleteRead, ProtocolError, ChunkedEncodingError, ConnectionError) as e:
+                # tenta novamente automaticamente
+                if attempt < max_attempts:
+                    continue
+                signals.error.emit(
+                    "O download foi interrompido antes de terminar.\n\n"
+                    "A conexão com o servidor foi encerrada durante a transferência.\n"
+                    "Tente novamente em alguns instantes."
+                )
+                return
 
-            # garante diretório (se exe estiver em subpasta)
-            os.makedirs(os.path.dirname(exe_enc_path), exist_ok=True)
+            except Exception as e:
+                msg = str(e)
 
-            encrypt_file_to(main_exe, exe_enc_path)
+                # tratamento amigável para leitura incompleta
+                if "IncompleteRead" in msg or "Connection broken" in msg:
+                    if attempt < max_attempts:
+                        continue
+                    signals.error.emit(
+                        "O download foi interrompido antes de terminar.\n\n"
+                        "A conexão com o servidor foi encerrada durante a transferência.\n"
+                        "Tente novamente em alguns instantes."
+                    )
+                    return
 
-            # remove exe original
-            try:
-                os.remove(main_exe)
-            except Exception:
-                # se não conseguir remover, pelo menos não quebra o fluxo
-                pass
-
-            # --- preencher infos ---
-            signals.install_dir = install_dir
-            signals.exe_relpath = exe_rel
-            signals.exe_enc_path = exe_enc_path
-
-            signals.progress.emit(100)
-            signals.finished.emit()
-
-        except Exception as e:
-            signals.error.emit(str(e))
+                signals.error.emit(msg)
+                return
 
     threading.Thread(target=run, daemon=True).start()
     return signals

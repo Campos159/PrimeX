@@ -12,6 +12,7 @@ from utils import resource_path
 from api_config import API_BASE
 
 from explore_page import MainWindow
+from session import load_session, save_session
 
 
 
@@ -176,6 +177,17 @@ class LoginWindow(QWidget):
 
             if r.status_code == 200:
                 user_data = r.json()
+
+                save_session({
+                    "id": user_data.get("id"),
+                    "nome": user_data.get("nome"),
+                    "email": user_data.get("email"),
+                    "token": user_data.get("token", ""),
+                    "plan": user_data.get("plan", "Nenhum"),
+                    "plan_active": user_data.get("plan_active", False),
+                    "expires_at": user_data.get("expires_at"),
+                })
+
                 QMessageBox.information(
                     self,
                     "Sucesso",
@@ -211,7 +223,15 @@ class LoginWindow(QWidget):
 
 
 if __name__ == "__main__":
+    from session import load_session
+
     app = QApplication(sys.argv)
-    window = LoginWindow()
+
+    sess = load_session()
+    if isinstance(sess, dict) and sess.get("id"):
+        window = MainWindow(usuario_info=sess)
+    else:
+        window = LoginWindow()
+
     window.show()
     sys.exit(app.exec())
