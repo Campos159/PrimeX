@@ -8,6 +8,8 @@ from PyQt6.QtGui import QFontDatabase, QIcon, QFont
 from utils import resource_path
 from homepage import HomePage
 from login import LoginWindow
+from explore_page import MainWindow
+from session import load_session
 
 FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
@@ -25,10 +27,13 @@ def main():
         if families:
             app.setFont(QFont(families[0]))
 
-    def create_login_window():
+    def create_next_window():
+        sess = load_session()
+        if isinstance(sess, dict) and sess.get("id"):
+            return MainWindow(usuario_info=sess)
         return LoginWindow()
 
-    splash = HomePage(next_window_factory=create_login_window, delay_ms=1800)
+    splash = HomePage(next_window_factory=create_next_window, delay_ms=1800)
     splash.show()
 
     sys.exit(app.exec())

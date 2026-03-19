@@ -188,6 +188,9 @@ class LoginWindow(QWidget):
                     "expires_at": user_data.get("expires_at"),
                 })
 
+                print("RESPOSTA DO LOGIN:", user_data)
+                print("ARQUIVO DE SESSÃO:", load_session())
+
                 QMessageBox.information(
                     self,
                     "Sucesso",

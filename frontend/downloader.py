@@ -11,6 +11,14 @@ from urllib3.exceptions import ProtocolError
 from requests.exceptions import ChunkedEncodingError, ConnectionError
 
 
+import requests.adapters
+
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
+
 # =========================
 # PASTAS (mesmo padrão do explore_page.py)
 # =========================
@@ -192,7 +200,12 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                         pass
 
                 # --- download ---
-                with requests.get(download_url, stream=True, timeout=(30, 600)) as r:
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept-Encoding": "identity"
+                }
+
+                with session.get(download_url, stream=True, timeout=(30, 600), headers=headers) as r:
                     r.raise_for_status()
 
                     total_length = int(r.headers.get("content-length") or 0)
@@ -215,17 +228,28 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                     last_pct = -1
 
                     with open(temp_zip, "wb") as f:
+
+                        buffer = bytearray()
+                        buffer_limit = 8 * 1024 * 1024  # 8MB
+
                         for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
                             if not chunk:
                                 continue
 
-                            f.write(chunk)
+                            buffer.extend(chunk)
                             downloaded += len(chunk)
+
+                            if len(buffer) >= buffer_limit:
+                                f.write(buffer)
+                                buffer.clear()
 
                             pct = min(100, int(downloaded * 100 / total_length))
                             if pct != last_pct:
                                 last_pct = pct
                                 signals.progress.emit(pct)
+
+                        if buffer:
+                            f.write(buffer)
 
                 # --- valida tamanho do arquivo baixado ---
                 real_size = os.path.getsize(temp_zip)
