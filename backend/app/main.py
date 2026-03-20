@@ -288,10 +288,11 @@ DROPBOX_FOLDER = "/jogos"
 def normalizar_dropbox_path(p: str) -> str:
     p = (p or "").strip()
 
-    # se alguém colar link público, tenta extrair path automaticamente
+    # se já for URL completa (CDN/R2), mantém como está
+    if p.startswith("http://") or p.startswith("https://"):
+        return p
+
     if "dropbox.com" in p:
-        # exemplo: https://www.dropbox.com/scl/fi/.../jogos/Arquivo.zip?dl=0
-        # aqui você pode exigir path manualmente para simplificar
         raise HTTPException(
             status_code=400,
             detail="Use apenas o CAMINHO do arquivo no Dropbox. Ex: /jogos/Arquivo.zip"
@@ -606,9 +607,11 @@ def criar_token(request: TokenRequest = Body(...), db: Session = Depends(get_db)
 # ================================
 # ROTAS - DOWNLOAD DE JOGOS
 # ================================
+from fastapi.responses import StreamingResponse, RedirectResponse
+
 @app.get("/jogos/{jogo_id}/download")
 def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
-    # 🔐 valida plano
+    # valida plano
     if not usuario_tem_plano_ativo(user_id, db):
         raise HTTPException(status_code=403, detail="Usuário sem plano ativo")
 
@@ -616,11 +619,23 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
     if not jogo:
         raise HTTPException(status_code=404, detail="Jogo não encontrado")
 
-    # agora jogo.dropbox_token deve ser PATH: /jogos/arquivo.zip
-    dropbox_path = dropbox_full_path(jogo.dropbox_token)
+    arquivo_ref = (jogo.dropbox_token or "").strip()
+
+    if not arquivo_ref:
+        raise HTTPException(status_code=404, detail="Jogo sem arquivo configurado")
+
+    # =========================
+    # NOVO: se for link HTTP(S), redireciona pro CDN/R2
+    # =========================
+    if arquivo_ref.startswith("http://") or arquivo_ref.startswith("https://"):
+        return RedirectResponse(url=arquivo_ref, status_code=302)
+
+    # =========================
+    # ANTIGO: fallback Dropbox
+    # =========================
+    dropbox_path = dropbox_full_path(arquivo_ref)
 
     try:
-        # baixa do dropbox via API oficial (não link público)
         dbx = get_dropbox_client(db)
         md, res = dbx.files_download(dropbox_path)
 
@@ -643,14 +658,12 @@ def baixar_jogo(jogo_id: int, user_id: int, db: Session = Depends(get_db)):
         )
 
     except dropbox.exceptions.ApiError as e:
-        # arquivo não existe / sem permissão etc
         raise HTTPException(status_code=404, detail=f"Arquivo não encontrado no Dropbox: {e}")
 
     except dropbox.exceptions.AuthError:
         raise HTTPException(status_code=500, detail="Dropbox token inválido/expirado no servidor")
 
     except Exception as e:
-        # fallback
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/admin/dropbox/listar")
