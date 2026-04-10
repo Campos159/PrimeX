@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['logos\\primex_ico.ico'],
+    icon=['primex_ico.ico'],
 )

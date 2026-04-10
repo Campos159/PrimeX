@@ -26,6 +26,25 @@ class Game(Base):
     descricao = Column(Text, default="")
     dropbox_token = Column(String, nullable=False)
     capa_url = Column(String, default="")
+
+    # Requisitos mínimos
+    min_os = Column(String, default="")
+    min_cpu = Column(String, default="")
+    min_ram_gb = Column(Integer, nullable=True)
+    min_gpu = Column(String, default="")
+    min_directx = Column(String, default="")
+    min_storage_gb = Column(Integer, nullable=True)
+    min_notes = Column(Text, default="")
+
+    # Requisitos recomendados
+    rec_os = Column(String, default="")
+    rec_cpu = Column(String, default="")
+    rec_ram_gb = Column(Integer, nullable=True)
+    rec_gpu = Column(String, default="")
+    rec_directx = Column(String, default="")
+    rec_storage_gb = Column(Integer, nullable=True)
+    rec_notes = Column(Text, default="")
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class TokenDB(Base):

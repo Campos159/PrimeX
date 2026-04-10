@@ -74,3 +74,69 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+from pydantic import BaseModel
+from datetime import datetime
+
+
+class GameBase(BaseModel):
+    nome: str
+    descricao: str = ""
+    dropbox_token: str
+    capa_url: str = ""
+
+    # Requisitos mínimos
+    min_os: str = ""
+    min_cpu: str = ""
+    min_ram_gb: int | None = None
+    min_gpu: str = ""
+    min_directx: str = ""
+    min_storage_gb: int | None = None
+    min_notes: str = ""
+
+    # Requisitos recomendados
+    rec_os: str = ""
+    rec_cpu: str = ""
+    rec_ram_gb: int | None = None
+    rec_gpu: str = ""
+    rec_directx: str = ""
+    rec_storage_gb: int | None = None
+    rec_notes: str = ""
+
+
+class GameCreate(GameBase):
+    pass
+
+
+class GameUpdate(BaseModel):
+    nome: str
+    descricao: str = ""
+    dropbox_token: str
+    capa_url: str = ""
+
+    # Requisitos mínimos
+    min_os: str = ""
+    min_cpu: str = ""
+    min_ram_gb: int | None = None
+    min_gpu: str = ""
+    min_directx: str = ""
+    min_storage_gb: int | None = None
+    min_notes: str = ""
+
+    # Requisitos recomendados
+    rec_os: str = ""
+    rec_cpu: str = ""
+    rec_ram_gb: int | None = None
+    rec_gpu: str = ""
+    rec_directx: str = ""
+    rec_storage_gb: int | None = None
+    rec_notes: str = ""
+
+
+class GameResponse(GameBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

@@ -378,6 +378,24 @@ class GameCreate(BaseModel):
     dropbox_token: str
     capa_url: str | None = None
 
+    # mínimos
+    min_os: str = ""
+    min_cpu: str = ""
+    min_ram_gb: int | None = None
+    min_gpu: str = ""
+    min_directx: str = ""
+    min_storage_gb: int | None = None
+    min_notes: str = ""
+
+    # recomendados
+    rec_os: str = ""
+    rec_cpu: str = ""
+    rec_ram_gb: int | None = None
+    rec_gpu: str = ""
+    rec_directx: str = ""
+    rec_storage_gb: int | None = None
+    rec_notes: str = ""
+
 class TokenRequest(BaseModel):
     type: str
 
@@ -392,8 +410,24 @@ def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
     novo = models.Game(
         nome=jogo.nome,
         descricao=jogo.descricao,
-        dropbox_token=dropbox_path,   # ✅ AGORA CORRETO
-        capa_url=jogo.capa_url or ""
+        dropbox_token=dropbox_path,
+        capa_url=jogo.capa_url or "",
+
+        min_os=jogo.min_os,
+        min_cpu=jogo.min_cpu,
+        min_ram_gb=jogo.min_ram_gb,
+        min_gpu=jogo.min_gpu,
+        min_directx=jogo.min_directx,
+        min_storage_gb=jogo.min_storage_gb,
+        min_notes=jogo.min_notes,
+
+        rec_os=jogo.rec_os,
+        rec_cpu=jogo.rec_cpu,
+        rec_ram_gb=jogo.rec_ram_gb,
+        rec_gpu=jogo.rec_gpu,
+        rec_directx=jogo.rec_directx,
+        rec_storage_gb=jogo.rec_storage_gb,
+        rec_notes=jogo.rec_notes
     )
 
     db.add(novo)
@@ -411,7 +445,23 @@ def listar_jogos(db: Session = Depends(get_db)):
             "nome": j.nome,
             "descricao": j.descricao,
             "dropbox_token": j.dropbox_token,
-            "capa_url": j.capa_url
+            "capa_url": j.capa_url,
+
+            "min_os": j.min_os,
+            "min_cpu": j.min_cpu,
+            "min_ram_gb": j.min_ram_gb,
+            "min_gpu": j.min_gpu,
+            "min_directx": j.min_directx,
+            "min_storage_gb": j.min_storage_gb,
+            "min_notes": j.min_notes,
+
+            "rec_os": j.rec_os,
+            "rec_cpu": j.rec_cpu,
+            "rec_ram_gb": j.rec_ram_gb,
+            "rec_gpu": j.rec_gpu,
+            "rec_directx": j.rec_directx,
+            "rec_storage_gb": j.rec_storage_gb,
+            "rec_notes": j.rec_notes
         } for j in jogos
     ]}
 
@@ -427,8 +477,24 @@ def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
 
     db_jogo.nome = jogo.nome
     db_jogo.descricao = jogo.descricao
-    db_jogo.dropbox_token = dropbox_path   # ✅ AGORA CORRETO
+    db_jogo.dropbox_token = dropbox_path
     db_jogo.capa_url = jogo.capa_url or ""
+
+    db_jogo.min_os = jogo.min_os
+    db_jogo.min_cpu = jogo.min_cpu
+    db_jogo.min_ram_gb = jogo.min_ram_gb
+    db_jogo.min_gpu = jogo.min_gpu
+    db_jogo.min_directx = jogo.min_directx
+    db_jogo.min_storage_gb = jogo.min_storage_gb
+    db_jogo.min_notes = jogo.min_notes
+
+    db_jogo.rec_os = jogo.rec_os
+    db_jogo.rec_cpu = jogo.rec_cpu
+    db_jogo.rec_ram_gb = jogo.rec_ram_gb
+    db_jogo.rec_gpu = jogo.rec_gpu
+    db_jogo.rec_directx = jogo.rec_directx
+    db_jogo.rec_storage_gb = jogo.rec_storage_gb
+    db_jogo.rec_notes = jogo.rec_notes
 
     db.commit()
 

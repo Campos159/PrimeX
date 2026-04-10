@@ -17,6 +17,12 @@ import secrets
 import string
 from functools import partial
 from PyQt6.QtGui import QFontDatabase, QFont
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
+    QSpacerItem, QSizePolicy, QFrame, QComboBox, QMessageBox, QStackedLayout,
+    QScrollArea, QListWidget, QListWidgetItem, QDialog, QLineEdit, QTextEdit,
+    QGridLayout, QSpinBox
+)
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from navbar import NavBar
@@ -694,9 +700,194 @@ class AdminPage(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor: {e}")
 
+    def _input_style(self):
+        return """
+            QLineEdit, QTextEdit, QSpinBox {
+                background-color: #0d0b1f;
+                color: white;
+                border: 2px solid #2a245f;
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 13px;
+            }
+            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
+                border: 2px solid #007eff;
+            }
+        """
+
+    def _section_title(self, text: str):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("""
+            font-size: 16px;
+            font-weight: bold;
+            color: #836FFF;
+            margin-top: 8px;
+            margin-bottom: 6px;
+        """)
+        return lbl
+
+    def _make_line_edit(self, placeholder="", value=""):
+        w = QLineEdit()
+        w.setPlaceholderText(placeholder)
+        w.setText(value or "")
+        w.setStyleSheet(self._input_style())
+        return w
+
+    def _make_text_edit(self, placeholder="", value=""):
+        w = QTextEdit()
+        w.setPlaceholderText(placeholder)
+        w.setPlainText(value or "")
+        w.setStyleSheet(self._input_style())
+        w.setMinimumHeight(70)
+        return w
+
+    def _make_spinbox(self, value=None, minimum=0, maximum=9999, suffix=""):
+        w = QSpinBox()
+        w.setRange(minimum, maximum)
+        w.setSuffix(suffix)
+        w.setSpecialValueText("")
+        w.setValue(value if isinstance(value, int) and value >= 0 else 0)
+        w.setStyleSheet(self._input_style())
+        return w
+
+    def _create_requirements_section(self, prefix: str, initial: dict | None = None):
+        initial = initial or {}
+
+        box = QFrame()
+        box.setStyleSheet("""
+            QFrame {
+                background-color: #151132;
+                border: 1px solid #2a245f;
+                border-radius: 12px;
+            }
+        """)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        fields = {}
+
+        def add_row(row, label_text, widget):
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("color: #e0d9ff; font-size: 13px; border: none;")
+            grid.addWidget(lbl, row, 0)
+            grid.addWidget(widget, row, 1)
+
+        fields[f"{prefix}_os"] = self._make_line_edit("Ex: Windows 10 64-bit", initial.get(f"{prefix}_os", ""))
+        add_row(0, "Sistema operacional", fields[f"{prefix}_os"])
+
+        fields[f"{prefix}_cpu"] = self._make_line_edit("Ex: Intel i5-8400", initial.get(f"{prefix}_cpu", ""))
+        add_row(1, "Processador", fields[f"{prefix}_cpu"])
+
+        ram_value = initial.get(f"{prefix}_ram_gb")
+        fields[f"{prefix}_ram_gb"] = self._make_spinbox(ram_value, suffix=" GB")
+        add_row(2, "RAM", fields[f"{prefix}_ram_gb"])
+
+        fields[f"{prefix}_gpu"] = self._make_line_edit("Ex: GTX 1060 / RX 580", initial.get(f"{prefix}_gpu", ""))
+        add_row(3, "GPU", fields[f"{prefix}_gpu"])
+
+        fields[f"{prefix}_directx"] = self._make_line_edit("Ex: DirectX 12", initial.get(f"{prefix}_directx", ""))
+        add_row(4, "DirectX", fields[f"{prefix}_directx"])
+
+        storage_value = initial.get(f"{prefix}_storage_gb")
+        fields[f"{prefix}_storage_gb"] = self._make_spinbox(storage_value, suffix=" GB")
+        add_row(5, "Armazenamento", fields[f"{prefix}_storage_gb"])
+
+        fields[f"{prefix}_notes"] = self._make_text_edit(
+            "Observações extras",
+            initial.get(f"{prefix}_notes", "")
+        )
+
+        layout.addLayout(grid)
+
+        notes_label = QLabel("Observações")
+        notes_label.setStyleSheet("color: #e0d9ff; font-size: 13px; border: none;")
+        layout.addWidget(notes_label)
+        layout.addWidget(fields[f"{prefix}_notes"])
+
+        return box, fields
+
+    def _spin_value_or_none(self, spin: QSpinBox):
+        return None if spin.value() <= 0 else spin.value()
+
+    def _collect_game_payload(self):
+        return {
+            "nome": (self.game_name.text() or "").strip(),
+            "descricao": (self.game_desc.toPlainText() or "").strip(),
+            "dropbox_token": (self.game_dropbox.text() or "").strip(),
+            "capa_url": (self.game_cover.text() or "").strip(),
+
+            "min_os": (self.req_fields["min_os"].text() or "").strip(),
+            "min_cpu": (self.req_fields["min_cpu"].text() or "").strip(),
+            "min_ram_gb": self._spin_value_or_none(self.req_fields["min_ram_gb"]),
+            "min_gpu": (self.req_fields["min_gpu"].text() or "").strip(),
+            "min_directx": (self.req_fields["min_directx"].text() or "").strip(),
+            "min_storage_gb": self._spin_value_or_none(self.req_fields["min_storage_gb"]),
+            "min_notes": (self.req_fields["min_notes"].toPlainText() or "").strip(),
+
+            "rec_os": (self.req_fields["rec_os"].text() or "").strip(),
+            "rec_cpu": (self.req_fields["rec_cpu"].text() or "").strip(),
+            "rec_ram_gb": self._spin_value_or_none(self.req_fields["rec_ram_gb"]),
+            "rec_gpu": (self.req_fields["rec_gpu"].text() or "").strip(),
+            "rec_directx": (self.req_fields["rec_directx"].text() or "").strip(),
+            "rec_storage_gb": self._spin_value_or_none(self.req_fields["rec_storage_gb"]),
+            "rec_notes": (self.req_fields["rec_notes"].toPlainText() or "").strip(),
+        }
+
+    def _clear_game_form(self):
+        self.game_name.clear()
+        self.game_desc.clear()
+        self.game_dropbox.clear()
+        self.game_cover.clear()
+
+        for key, widget in self.req_fields.items():
+            if isinstance(widget, QLineEdit):
+                widget.clear()
+            elif isinstance(widget, QTextEdit):
+                widget.clear()
+            elif isinstance(widget, QSpinBox):
+                widget.setValue(0)
+
     def create_add_game_page(self):
         frame = QFrame()
-        layout = QVBoxLayout(frame)
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #0d0b1f;
+                width: 12px;
+                margin: 6px 0 6px 0;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #836FFF;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #9a7dff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
 
         title = QLabel("Adicionar Novo Jogo")
         title.setStyleSheet("""
@@ -706,38 +897,38 @@ class AdminPage(QWidget):
         """)
         layout.addWidget(title)
 
-        # Campos do formulário
-        from PyQt6.QtWidgets import QLineEdit, QTextEdit
-
-        self.game_name = QLineEdit()
-        self.game_name.setPlaceholderText("Nome do jogo")
-        self.game_name.setStyleSheet("padding: 5px; border: 2px solid #007eff; border-radius: 5px; color: white;")
+        self.game_name = self._make_line_edit("Nome do jogo")
         layout.addWidget(self.game_name)
 
-        self.game_desc = QTextEdit()
-        self.game_desc.setPlaceholderText("Descrição do jogo")
-        self.game_desc.setStyleSheet("padding: 5px; border: 2px solid #007eff; border-radius: 5px; color: white;")
+        self.game_desc = self._make_text_edit("Descrição do jogo")
         layout.addWidget(self.game_desc)
 
-        self.game_dropbox = QLineEdit()
-        self.game_dropbox.setPlaceholderText("Token ou Link do Dropbox")
-        self.game_dropbox.setStyleSheet("padding: 5px; border: 2px solid #007eff; border-radius: 5px; color: white;")
+        self.game_dropbox = self._make_line_edit("Token, caminho ou link do arquivo")
         layout.addWidget(self.game_dropbox)
 
-        self.game_cover = QLineEdit()
-        self.game_cover.setPlaceholderText("URL da capa (opcional)")
-        self.game_cover.setStyleSheet("padding: 5px; border: 2px solid #007eff; border-radius: 5px; color: white;")
+        self.game_cover = self._make_line_edit("URL da capa (opcional)")
         layout.addWidget(self.game_cover)
 
-        # Botão para salvar
+        layout.addWidget(self._section_title("Requisitos mínimos"))
+        min_box, min_fields = self._create_requirements_section("min")
+        layout.addWidget(min_box)
+
+        layout.addWidget(self._section_title("Requisitos recomendados"))
+        rec_box, rec_fields = self._create_requirements_section("rec")
+        layout.addWidget(rec_box)
+
+        self.req_fields = {}
+        self.req_fields.update(min_fields)
+        self.req_fields.update(rec_fields)
+
         save_btn = QPushButton("Salvar Jogo")
         save_btn.setStyleSheet("""
             QPushButton {
                 background-color: #007eff;
                 color: white;
                 font-size: 14px;
-                padding: 8px 12px;
-                border-radius: 5px;
+                padding: 10px 12px;
+                border-radius: 8px;
             }
             QPushButton:hover {
                 background-color: #005bb5;
@@ -747,41 +938,39 @@ class AdminPage(QWidget):
         layout.addWidget(save_btn)
 
         layout.addStretch()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
         return frame
 
     def save_game(self):
-        data = {
-            "nome": (self.game_name.text() or "").strip(),
-            "descricao": (self.game_desc.toPlainText() or "").strip(),
-            "dropbox_token": (self.game_dropbox.text() or "").strip(),
-            "capa_url": (self.game_cover.text() or "").strip()
-        }
+        data = self._collect_game_payload()
 
         if not data["nome"]:
             QMessageBox.warning(self, "Erro", "Preencha o nome do jogo.")
             return
 
         if not data["dropbox_token"]:
-            QMessageBox.warning(self, "Erro", "Informe o Token/Link do Dropbox.")
+            QMessageBox.warning(self, "Erro", "Informe o Token/Link/Caminho do jogo.")
             return
 
         try:
             response = request_api(self, "POST", "/admin/adicionar_jogo", json_body=data, timeout=20)
 
-            # Debug SEMPRE quando der ruim (e opcionalmente quando ok)
             if response.status_code != 200:
                 payload = safe_json(response) or {}
                 detail = payload.get("detail") or payload.get("message") or ""
                 debug_http_dialog(self, "Erro 500/4xx - adicionar_jogo", response, extra=f"DETAIL: {detail}")
-                QMessageBox.warning(self, "Erro",
-                                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail or response.text[:1200]}")
+                QMessageBox.warning(
+                    self,
+                    "Erro",
+                    f"Não foi possível salvar o jogo ({response.status_code}).\n\n{detail or response.text[:1200]}"
+                )
                 return
 
             QMessageBox.information(self, "Sucesso", "Jogo adicionado com sucesso!")
-            self.game_name.clear()
-            self.game_desc.clear()
-            self.game_dropbox.clear()
-            self.game_cover.clear()
+            self._clear_game_form()
 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
@@ -936,57 +1125,137 @@ class AdminPage(QWidget):
                 QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor: {e}")
 
     def edit_game(self, jogo):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Editar Jogo")
-        dialog.setStyleSheet("background-color: #1e1e1e; color: white;")
+        try:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Editar Jogo")
+            dialog.resize(760, 760)
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #120f2a;
+                    color: white;
+                }
+            """)
 
-        layout = QVBoxLayout(dialog)
+            outer = QVBoxLayout(dialog)
 
-        nome_input = QLineEdit(jogo["nome"])
-        nome_input.setPlaceholderText("Nome do jogo")
-        layout.addWidget(nome_input)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setStyleSheet("""
+                QScrollArea {
+                    border: none;
+                    background: transparent;
+                }
+            """)
 
-        desc_input = QTextEdit(jogo["descricao"])
-        desc_input.setPlaceholderText("Descrição do jogo")
-        layout.addWidget(desc_input)
+            content = QWidget()
+            layout = QVBoxLayout(content)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(12)
 
-        token_input = QLineEdit(jogo["dropbox_token"])
-        token_input.setPlaceholderText("Token do Dropbox")
-        layout.addWidget(token_input)
+            nome_input = self._make_line_edit("Nome do jogo", jogo.get("nome", ""))
+            layout.addWidget(nome_input)
 
-        capa_input = QLineEdit(jogo["capa_url"])
-        capa_input.setPlaceholderText("URL da capa")
-        layout.addWidget(capa_input)
+            desc_input = self._make_text_edit("Descrição do jogo", jogo.get("descricao", ""))
+            layout.addWidget(desc_input)
 
-        save_btn = QPushButton("Salvar Alterações")
-        save_btn.setStyleSheet("background-color: #007eff; color: white; font-size: 14px;")
-        layout.addWidget(save_btn)
+            token_input = self._make_line_edit("Token/caminho/link do jogo", jogo.get("dropbox_token", ""))
+            layout.addWidget(token_input)
 
-        def salvar():
-            try:
-                response = request_api(
-                    self, "PUT", f"/admin/editar_jogo/{jogo['id']}",
-                    json_body={
-                        "nome": (nome_input.text() or "").strip(),
-                        "descricao": (desc_input.toPlainText() or "").strip(),
-                        "dropbox_token": (token_input.text() or "").strip(),
-                        "capa_url": (capa_input.text() or "").strip()
-                    },
-                    timeout=20
-                )
-                if response.status_code != 200:
-                    debug_http_dialog(self, "Erro - editar_jogo", response)
-                if response.status_code == 200:
+            capa_input = self._make_line_edit("URL da capa", jogo.get("capa_url", ""))
+            layout.addWidget(capa_input)
+
+            layout.addWidget(self._section_title("Requisitos mínimos"))
+            min_box, min_fields = self._create_requirements_section("min", jogo)
+            layout.addWidget(min_box)
+
+            layout.addWidget(self._section_title("Requisitos recomendados"))
+            rec_box, rec_fields = self._create_requirements_section("rec", jogo)
+            layout.addWidget(rec_box)
+
+            fields = {}
+            fields.update(min_fields)
+            fields.update(rec_fields)
+
+            save_btn = QPushButton("Salvar Alterações")
+            save_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #007eff;
+                    color: white;
+                    font-size: 14px;
+                    padding: 10px;
+                    border-radius: 8px;
+                }
+                QPushButton:hover {
+                    background-color: #005bb5;
+                }
+            """)
+            layout.addWidget(save_btn)
+            layout.addStretch()
+
+            scroll.setWidget(content)
+            outer.addWidget(scroll)
+
+            def spin_value_or_none(spin):
+                return None if spin.value() <= 0 else spin.value()
+
+            def salvar():
+                payload = {
+                    "nome": (nome_input.text() or "").strip(),
+                    "descricao": (desc_input.toPlainText() or "").strip(),
+                    "dropbox_token": (token_input.text() or "").strip(),
+                    "capa_url": (capa_input.text() or "").strip(),
+
+                    "min_os": (fields["min_os"].text() or "").strip(),
+                    "min_cpu": (fields["min_cpu"].text() or "").strip(),
+                    "min_ram_gb": spin_value_or_none(fields["min_ram_gb"]),
+                    "min_gpu": (fields["min_gpu"].text() or "").strip(),
+                    "min_directx": (fields["min_directx"].text() or "").strip(),
+                    "min_storage_gb": spin_value_or_none(fields["min_storage_gb"]),
+                    "min_notes": (fields["min_notes"].toPlainText() or "").strip(),
+
+                    "rec_os": (fields["rec_os"].text() or "").strip(),
+                    "rec_cpu": (fields["rec_cpu"].text() or "").strip(),
+                    "rec_ram_gb": spin_value_or_none(fields["rec_ram_gb"]),
+                    "rec_gpu": (fields["rec_gpu"].text() or "").strip(),
+                    "rec_directx": (fields["rec_directx"].text() or "").strip(),
+                    "rec_storage_gb": spin_value_or_none(fields["rec_storage_gb"]),
+                    "rec_notes": (fields["rec_notes"].toPlainText() or "").strip(),
+                }
+
+                if not payload["nome"]:
+                    QMessageBox.warning(dialog, "Erro", "Preencha o nome do jogo.")
+                    return
+
+                if not payload["dropbox_token"]:
+                    QMessageBox.warning(dialog, "Erro", "Informe o Token/Link/Caminho do jogo.")
+                    return
+
+                try:
+                    response = request_api(
+                        self,
+                        "PUT",
+                        f"/admin/editar_jogo/{jogo['id']}",
+                        json_body=payload,
+                        timeout=20
+                    )
+
+                    if response.status_code != 200:
+                        debug_http_dialog(self, "Erro - editar_jogo", response)
+                        QMessageBox.warning(dialog, "Erro", f"Falha ao editar jogo ({response.status_code})")
+                        return
+
                     QMessageBox.information(self, "Sucesso", "Jogo atualizado com sucesso")
                     dialog.accept()
                     self.load_games()
-                else:
-                    QMessageBox.warning(self, "Erro", f"Falha ao editar jogo ({response.status_code})")
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao salvar: {e}")
 
-        save_btn.clicked.connect(salvar)
-        dialog.exec()
+                except Exception as e:
+                    QMessageBox.critical(dialog, "Erro", f"Erro ao salvar: {e}")
+
+            save_btn.clicked.connect(salvar)
+            dialog.exec()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro ao abrir edição", str(e))
 
     def open_explore_page(self):
         try:

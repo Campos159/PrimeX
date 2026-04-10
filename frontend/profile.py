@@ -15,7 +15,7 @@ from session import load_session, save_session
 from utils import resource_path
 from navbar import NavBar
 
-FONT_PATH = os.path.join(os.getcwd(), "assets", "fonts", "VT323-Regular.ttf")
+FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
 
 class ProfilePage(QWidget):
@@ -86,7 +86,8 @@ class ProfilePage(QWidget):
         # =========================
         nav_callbacks = {
             "EXPLORAR": self.open_explore_page,
-            "INSTALADOS": self.open_instalados
+            "INSTALADOS": self.open_instalados,
+            "DOWNLOADS": self.open_downloads
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         main_layout.addWidget(self.nav_bar)
@@ -260,6 +261,12 @@ class ProfilePage(QWidget):
             "plan_active": self.user_info.get("plan_active"),
             "expires_at": self.user_info.get("expires_at"),
         })
+
+    def open_downloads(self):
+        from downloads import DownloadsPage
+        self.downloads_window = DownloadsPage(usuario_info=self.user_info)
+        self.downloads_window.show()
+        self.close()
 
     # =========================
     # Avatares

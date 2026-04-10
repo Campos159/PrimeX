@@ -92,7 +92,8 @@ class InstaladosPage(QWidget):
         # =========================
         nav_callbacks = {
             "EXPLORAR": self.open_explore,
-            "INSTALADOS": self.reload_page
+            "INSTALADOS": self.reload_page,
+            "DOWNLOADS": self.open_downloads
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         self.main_layout.addWidget(self.nav_bar)
@@ -110,11 +111,45 @@ class InstaladosPage(QWidget):
         # =========================
         # GRID
         # =========================
+        # ===== SCROLL + GRID =====
+        from PyQt6.QtWidgets import QScrollArea
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background: transparent; }
+            QScrollBar:vertical {
+                border: none;
+                background: #0d0b1f;
+                width: 12px;
+                margin: 8px 4px 8px 4px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #836FFF;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #9a7dff;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
         self.grid_widget = QWidget()
+        self.grid_widget.setStyleSheet("background: transparent;")
+
         self.grid_layout = QGridLayout(self.grid_widget)
-        self.grid_layout.setSpacing(20)
-        self.grid_layout.setContentsMargins(0, 5, 0, 0)
-        self.main_layout.addWidget(self.grid_widget)
+        self.grid_layout.setHorizontalSpacing(20)
+        self.grid_layout.setVerticalSpacing(50)
+        self.grid_layout.setContentsMargins(0, 5, 0, 25)
+
+        self.scroll_area.setWidget(self.grid_widget)
+        self.main_layout.addWidget(self.scroll_area)
 
         self.cards = []
 
@@ -128,6 +163,14 @@ class InstaladosPage(QWidget):
     # =========================
     # NAV ACTIONS
     # =========================
+
+    def open_downloads(self):
+        from downloads import DownloadsPage
+        self.downloads_window = DownloadsPage(usuario_info=self.user_info)
+        self.downloads_window.show()
+        self.close()
+
+
     def open_profile(self):
         self.profile_window = ProfilePage(user_info=self.user_info)
         self.profile_window.show()
@@ -215,15 +258,52 @@ class InstaladosPage(QWidget):
     # FILTERS
     # =========================
     def apply_filters(self, search_text=None, active_genres=None):
+        # quando chamado manualmente, lê do componente
         if search_text is None or active_genres is None:
             search_text, active_genres = self.filter_bar.get_filters()
 
+        search_text = (search_text or "").lower().strip()
+
+        filtered_cards = []
+
+        # 1) filtra os cards
         for card in self.cards:
-            title = (card.game_title or "").lower()
+            title = card.game_title.lower()
+
             genre_match = True
             if active_genres:
                 genre_match = any(g in card.genres for g in active_genres)
-            card.setVisible(search_text in title and genre_match)
+
+            text_match = search_text in title
+            visible = text_match and genre_match
+
+            card.setVisible(visible)
+
+            if visible:
+                filtered_cards.append(card)
+
+        # 2) limpa o grid atual
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        # 3) adiciona os cards filtrados em sequência
+        for idx, card in enumerate(filtered_cards):
+            row = idx // 5
+            col = idx % 5
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # 4) placeholders para manter alinhamento visual
+        total_slots = max(5, len(filtered_cards))
+        for idx in range(len(filtered_cards), total_slots):
+            row = idx // 5
+            col = idx % 5
+            placeholder = QLabel()
+            placeholder.setFixedSize(260, 485)
+            placeholder.setStyleSheet("background-color: transparent; border: none;")
+            self.grid_layout.addWidget(placeholder, row, col)
 
 
 def main():

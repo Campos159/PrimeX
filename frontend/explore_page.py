@@ -10,7 +10,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
 from profile import ProfilePage
 from navbar import NavBar
-from downloader import baixar_jogo, decrypt_file_to
+from downloader import decrypt_file_to, wait_file_ready
 from filter_bar import FilterBar
 from PyQt6.QtGui import QFontDatabase
 from api_config import API_BASE
@@ -21,6 +21,12 @@ from utils import resource_path
 from session import load_session
 from PyQt6.QtWidgets import QDialog, QTextEdit
 from PyQt6.QtGui import QFont
+from download_manager import download_manager
+import platform
+import shutil
+import subprocess
+import re
+import psutil
 
 
 
@@ -96,6 +102,103 @@ def find_best_exe(install_dir: str) -> str:
     return candidates[0][2]
 
 
+import re
+
+
+def _normalize_exe_name(name: str) -> str:
+    name = os.path.splitext(name)[0]
+    name = name.lower().strip()
+    name = re.sub(r'[\s_\-]+', '', name)
+    return name
+
+
+def find_best_exe_by_folder_name(install_dir: str) -> str:
+    """
+    Procura primeiro um .exe com nome igual ao da pasta do jogo.
+    Se não achar, usa fallback inteligente.
+    Retorna CAMINHO RELATIVO ao install_dir.
+    """
+    ignore_keywords = [
+        "unins", "uninstall", "setup", "install", "installer",
+        "dxsetup", "directx", "vcredist", "redist", "redistributable",
+        "crashreport", "launcher", "updater", "rockstar", "socialclub",
+        "unitycrashhandler", "ucrt"
+    ]
+
+    folder_name = os.path.basename(os.path.normpath(install_dir))
+    folder_name_norm = _normalize_exe_name(folder_name)
+
+    exact_candidates = []
+    fallback_candidates = []
+
+    for root, _, files in os.walk(install_dir):
+        for fn in files:
+            if not fn.lower().endswith(".exe"):
+                continue
+
+            low = fn.lower()
+            if any(k in low for k in ignore_keywords):
+                continue
+
+            full = os.path.join(root, fn)
+
+            try:
+                size = os.path.getsize(full)
+            except Exception:
+                size = 0
+
+            if size < 20 * 1024:
+                continue
+
+            rel = os.path.relpath(full, install_dir)
+            depth = rel.count(os.sep)
+            exe_name_norm = _normalize_exe_name(fn)
+
+            item = (depth, size, rel)
+
+            # prioridade máxima: nome do exe = nome da pasta
+            if exe_name_norm == folder_name_norm:
+                exact_candidates.append(item)
+            else:
+                fallback_candidates.append(item)
+
+    if exact_candidates:
+        # mais perto da raiz, depois maior
+        exact_candidates.sort(key=lambda x: (x[0], -x[1]))
+        return exact_candidates[0][2]
+
+    if fallback_candidates:
+        # mais perto da raiz, depois maior
+        fallback_candidates.sort(key=lambda x: (x[0], -x[1]))
+        return fallback_candidates[0][2]
+
+    return ""
+
+
+def exe_saved_is_suspicious(exe_rel: str) -> bool:
+    if not exe_rel:
+        return True
+
+    low = exe_rel.lower().replace("\\", "/")
+
+    # ✅ launchers válidos (NÃO são suspeitos)
+    allowed_launchers = (
+        "launcher.exe",
+        "launcher1.exe",
+    )
+
+    if low.endswith(allowed_launchers):
+        return False
+
+    bad_keywords = [
+        "rockstar", "socialclub", "setup", "install",
+        "unins", "uninstall", "updater", "crashreport",
+        "dxsetup", "vcredist", "redistributable"
+    ]
+
+    return any(k in low for k in bad_keywords)
+
+
 def user_can_download(user_info: dict) -> bool:
     if not user_info:
         return False
@@ -154,10 +257,11 @@ def load_installed():
 # GAME CARD
 # =========================
 class GameCard(QWidget):
-    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao=""):
-
+    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao="", requisitos=None):
 
         super().__init__()
+
+        self.requisitos = requisitos or {}
 
         # estado do usuário (vem do MainWindow)
         self.user_info = dict(user_info or {})
@@ -172,6 +276,10 @@ class GameCard(QWidget):
         self.image_url = image_url
         self.genres = genres or []
         self.descricao = descricao
+
+        download_manager.download_updated.connect(self._on_global_download_updated)
+        download_manager.download_finished.connect(self._on_global_download_finished)
+        download_manager.download_error.connect(self._on_global_download_error)
 
 
 
@@ -337,6 +445,11 @@ class GameCard(QWidget):
 
         root.addLayout(btns)
 
+
+        dl = download_manager.get_download(self.game_title)
+        if dl:
+            self._on_global_download_updated(self.game_title, dl)
+
         if self.is_installed():
             self.set_playable()
 
@@ -344,6 +457,298 @@ class GameCard(QWidget):
     # =========================
     # MÉTODOS AUXILIARES
     # =========================
+
+    def _get_pc_specs(self):
+        specs = {
+            "cpu": platform.processor() or "",
+            "ram_gb": 0,
+            "gpu": "",
+            "system": platform.system(),
+            "release": platform.release(),
+        }
+
+        try:
+            specs["ram_gb"] = round(psutil.virtual_memory().total / (1024 ** 3))
+        except Exception:
+            specs["ram_gb"] = 0
+
+        # CPU fallback
+        if not specs["cpu"]:
+            try:
+                specs["cpu"] = platform.uname().processor or ""
+            except Exception:
+                pass
+
+        # GPU via WMIC / PowerShell no Windows
+        try:
+            if os.name == "nt":
+                result = subprocess.run(
+                    ["wmic", "path", "win32_VideoController", "get", "name"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
+                lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+                lines = [l for l in lines if l.lower() != "name"]
+                if lines:
+                    specs["gpu"] = lines[0]
+        except Exception:
+            pass
+
+        return specs
+
+    def _extract_drive_from_install_path(self):
+        data = load_installed()
+        info = data.get(self.game_title) or {}
+        install_dir = (info.get("install_dir") or "").strip()
+
+        if install_dir:
+            drive = os.path.splitdrive(install_dir)[0]
+            if drive:
+                return drive + "\\"
+
+        # fallback: pasta padrão atual do launcher
+        if GAMES_DIR:
+            drive = os.path.splitdrive(GAMES_DIR)[0]
+            if drive:
+                return drive + "\\"
+
+        return os.path.abspath(os.sep)
+
+    def _get_free_disk_gb(self):
+        try:
+            target_path = self._extract_drive_from_install_path()
+            usage = shutil.disk_usage(target_path)
+            return round(usage.free / (1024 ** 3))
+        except Exception:
+            return 0
+
+    def _normalize_text(self, text):
+        text = (text or "").lower().strip()
+        text = re.sub(r"[\s_\-]+", "", text)
+        return text
+
+    def _basic_cpu_match(self, user_cpu: str, required_cpu: str):
+        if not required_cpu:
+            return None
+
+        u = self._normalize_text(user_cpu)
+        r = self._normalize_text(required_cpu)
+
+        if not u:
+            return None
+
+        if r in u:
+            return True
+
+        cpu_order = ["i3", "i5", "i7", "i9", "ryzen3", "ryzen5", "ryzen7", "ryzen9"]
+
+        def get_rank(text):
+            for idx, item in enumerate(cpu_order):
+                if item in text:
+                    return idx
+            return None
+
+        user_rank = get_rank(u)
+        req_rank = get_rank(r)
+
+        if user_rank is not None and req_rank is not None:
+            return user_rank >= req_rank
+
+        return None
+
+    def _basic_gpu_match(self, user_gpu: str, required_gpu: str):
+        if not required_gpu:
+            return None
+
+        u = self._normalize_text(user_gpu)
+        r = self._normalize_text(required_gpu)
+
+        if not u:
+            return None
+
+        if r in u:
+            return True
+
+        # comparação simples por famílias comuns
+        def extract_series(text):
+            nums = re.findall(r"\d{3,4}", text)
+            return int(nums[0]) if nums else None
+
+        user_series = extract_series(u)
+        req_series = extract_series(r)
+
+        nvidia_family = any(x in u for x in ["gtx", "rtx"]) and any(x in r for x in ["gtx", "rtx"])
+        amd_family = any(x in u for x in ["rx", "radeon"]) and any(x in r for x in ["rx", "radeon"])
+
+        if user_series and req_series and (nvidia_family or amd_family):
+            return user_series >= req_series
+
+        return None
+
+    def _analyze_pc_for_game(self):
+        req = self.requisitos or {}
+        min_req = req.get("min") or {}
+        rec_req = req.get("rec") or {}
+
+        specs = self._get_pc_specs()
+        free_disk_gb = self._get_free_disk_gb()
+
+        checks = []
+
+        # RAM mínima
+        min_ram = min_req.get("ram")
+        if isinstance(min_ram, int) and min_ram > 0:
+            checks.append({
+                "label": "RAM mínima",
+                "required": f"{min_ram} GB",
+                "current": f"{specs['ram_gb']} GB",
+                "ok": specs["ram_gb"] >= min_ram
+            })
+
+        # Armazenamento mínimo
+        min_storage = min_req.get("storage")
+        if isinstance(min_storage, int) and min_storage > 0:
+            checks.append({
+                "label": "Espaço livre",
+                "required": f"{min_storage} GB",
+                "current": f"{free_disk_gb} GB livres",
+                "ok": free_disk_gb >= min_storage
+            })
+
+        # CPU mínima
+        min_cpu = (min_req.get("cpu") or "").strip()
+        if min_cpu:
+            cpu_match = self._basic_cpu_match(specs["cpu"], min_cpu)
+            checks.append({
+                "label": "CPU mínima",
+                "required": min_cpu,
+                "current": specs["cpu"] or "Não detectada",
+                "ok": cpu_match
+            })
+
+        # GPU mínima
+        min_gpu = (min_req.get("gpu") or "").strip()
+        if min_gpu:
+            gpu_match = self._basic_gpu_match(specs["gpu"], min_gpu)
+            checks.append({
+                "label": "GPU mínima",
+                "required": min_gpu,
+                "current": specs["gpu"] or "Não detectada",
+                "ok": gpu_match
+            })
+
+        failed = [c for c in checks if c["ok"] is False]
+        unknown = [c for c in checks if c["ok"] is None]
+
+        # Resultado geral
+        if not checks:
+            status = "uncertain"
+            headline = "⚠️ Este jogo ainda não possui requisitos mínimos cadastrados."
+        elif failed:
+            status = "below_minimum"
+            headline = "❌ Seu PC pode não rodar este jogo corretamente."
+        elif unknown:
+            status = "uncertain"
+            headline = "⚠️ Não foi possível confirmar tudo com precisão, mas seu PC pode rodar."
+        else:
+            status = "ok"
+            headline = "✅ Seu PC atende aos requisitos mínimos."
+
+        # Recomendados
+        recommendation_lines = []
+
+        rec_ram = rec_req.get("ram")
+        if isinstance(rec_ram, int) and rec_ram > 0:
+            recommendation_lines.append(f"RAM recomendada: {rec_ram} GB")
+
+        rec_storage = rec_req.get("storage")
+        if isinstance(rec_storage, int) and rec_storage > 0:
+            recommendation_lines.append(f"Espaço recomendado: {rec_storage} GB")
+
+        rec_gpu = (rec_req.get("gpu") or "").strip()
+        if rec_gpu:
+            recommendation_lines.append(f"GPU recomendada: {rec_gpu}")
+
+        rec_cpu = (rec_req.get("cpu") or "").strip()
+        if rec_cpu:
+            recommendation_lines.append(f"CPU recomendada: {rec_cpu}")
+
+        rec_os = (rec_req.get("os") or "").strip()
+        if rec_os:
+            recommendation_lines.append(f"Sistema recomendado: {rec_os}")
+
+        rec_dx = (rec_req.get("dx") or "").strip()
+        if rec_dx:
+            recommendation_lines.append(f"DirectX recomendado: {rec_dx}")
+
+        return {
+            "status": status,
+            "headline": headline,
+            "checks": checks,
+            "specs": specs,
+            "free_disk_gb": free_disk_gb,
+            "recommendations": recommendation_lines,
+        }
+
+    def _build_pc_check_text(self, analysis: dict):
+        lines = [analysis["headline"], ""]
+
+        specs = analysis["specs"]
+        lines.append("🖥 Seu PC:")
+        lines.append(f"CPU: {specs.get('cpu') or 'Não detectada'}")
+        lines.append(f"RAM: {specs.get('ram_gb', 0)} GB")
+        lines.append(f"GPU: {specs.get('gpu') or 'Não detectada'}")
+        lines.append(f"Espaço livre: {analysis.get('free_disk_gb', 0)} GB")
+        lines.append("")
+
+        if analysis["checks"]:
+            lines.append("🔍 Comparação com os requisitos mínimos:")
+            for item in analysis["checks"]:
+                ok = item["ok"]
+                if ok is True:
+                    icon = "✅"
+                elif ok is False:
+                    icon = "❌"
+                else:
+                    icon = "⚠️"
+
+                lines.append(
+                    f"{icon} {item['label']}: atual {item['current']} | exigido {item['required']}"
+                )
+            lines.append("")
+
+        if analysis["recommendations"]:
+            lines.append("⭐ Recomendado pelo jogo:")
+            for rec in analysis["recommendations"]:
+                lines.append(f"- {rec}")
+            lines.append("")
+
+        if analysis["status"] == "below_minimum":
+            lines.append("Você ainda pode tentar instalar, mas há risco de travamentos ou de o jogo não abrir.")
+        elif analysis["status"] == "uncertain":
+            lines.append("Alguns itens não puderam ser validados com precisão. Você pode continuar se quiser.")
+        else:
+            lines.append("Seu PC parece apto para instalar este jogo.")
+
+        return "\n".join(lines)
+
+    def _confirm_pc_check_before_install(self):
+        analysis = self._analyze_pc_for_game()
+        message = self._build_pc_check_text(analysis)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Verificação do PC")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText("Análise concluída")
+        msg.setInformativeText(message)
+        continuar = msg.addButton("Continuar instalação", QMessageBox.ButtonRole.AcceptRole)
+        cancelar = msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(continuar)
+        msg.exec()
+
+        return msg.clickedButton() == continuar
 
     def _update_title_text(self):
         txt = self.game_title.upper()
@@ -602,39 +1007,100 @@ class GameCard(QWidget):
         if hasattr(self, "title_label"):
             self._update_title_text()
 
-    def install_game(self):
+    def _on_global_download_updated(self, game_name: str, data: dict):
+        if game_name != self.game_title:
+            return
 
+        status = data.get("status", "")
+        progress = int(data.get("progress", 0))
+
+        if status == "na_fila":
+            self.btn_install.setText("NA FILA")
+            self.btn_install.setEnabled(False)
+
+        elif status == "baixando":
+            self.btn_install.setText(f"BAIXANDO... {progress}%")
+            self.btn_install.setEnabled(False)
+
+        elif status == "extraindo":
+            self.btn_install.setText("EXTRAINDO...")
+            self.btn_install.setEnabled(False)
+
+        elif status == "finalizando":
+            self.btn_install.setText("FINALIZANDO...")
+            self.btn_install.setEnabled(False)
+
+        elif status == "concluido":
+            # se já instalou no JSON, vira jogável
+            if self.is_installed():
+                self.set_playable()
+            else:
+                self.btn_install.setText("INSTALAR")
+                self.btn_install.setEnabled(True)
+
+        elif status == "erro":
+            self.btn_install.setText("INSTALAR")
+            self.btn_install.setEnabled(True)
+
+    def _on_global_download_finished(self, game_name: str):
+        if game_name != self.game_title:
+            return
+
+        if self.is_installed():
+            self.set_playable()
+        else:
+            self.btn_install.setText("INSTALAR")
+            self.btn_install.setEnabled(True)
+
+    def _on_global_download_error(self, game_name: str, msg: str):
+        if game_name != self.game_title:
+            return
+
+        self.btn_install.setText("INSTALAR")
+        self.btn_install.setEnabled(True)
+
+    def install_game(self):
         uid = (self.user_info or {}).get("id")
         if not uid:
             QMessageBox.warning(self, "Sessão inválida", "Usuário sem ID válido. Faça login novamente.")
             return
+
         # se já está instalado: jogar
         if self.is_installed():
             self.play_game()
             return
 
-        # ✅ bloqueia se não tiver plano/token ativo
+        # bloqueia se não tiver plano/token ativo
         if not user_can_download(self.user_info):
-            QMessageBox.warning(self, "Acesso negado",
-                                "Seu plano/token não está ATIVO. Ative seu acesso para baixar jogos.")
+            QMessageBox.warning(
+                self,
+                "Acesso negado",
+                "Seu plano/token não está ATIVO. Ative seu acesso para baixar jogos."
+            )
             return
 
-        self.btn_install.setText("BAIXANDO... 0%")
+        # se já está na fila / baixando, não adiciona de novo
+        if download_manager.is_downloading(self.game_title):
+            QMessageBox.information(
+                self,
+                "Download em andamento",
+                f"{self.game_title} já está na fila ou em download."
+            )
+            return
+
+        # 🔥 NOVO: verificação do PC antes de instalar
+        if not self._confirm_pc_check_before_install():
+            return
+
+        download_manager.enqueue_download(
+            game_name=self.game_title,
+            download_url=self.download_url,
+            image_url=self.image_url,
+            genres=self.genres
+        )
+
+        self.btn_install.setText("NA FILA")
         self.btn_install.setEnabled(False)
-
-        signals = baixar_jogo(self.game_title, self.download_url, card=self)
-
-        signals.progress.connect(self._set_progress)
-
-        # MUITO IMPORTANTE: capture o signals aqui
-        signals.finished.connect(lambda: self._on_install_finished(signals))
-
-        def on_error(msg):
-            self.btn_install.setText("INSTALAR")
-            self.btn_install.setEnabled(True)
-            QMessageBox.warning(self, "Erro no download", msg)
-
-        signals.error.connect(on_error)
 
     def _on_install_finished(self, signals):
         install_dir = os.path.normpath(signals.install_dir or os.path.join(GAMES_DIR, self.game_title))
@@ -642,6 +1108,13 @@ class GameCard(QWidget):
         # aqui o downloader já tentou detectar exe e proteger
         exe_rel = getattr(signals, "exe_relpath", "") or ""
         exe_enc = getattr(signals, "exe_enc_path", "") or ""
+
+        # segurança extra: se vier exe suspeito, recalcula localmente
+        if not exe_rel or exe_saved_is_suspicious(exe_rel):
+            fixed_exe_rel = find_best_exe_by_folder_name(install_dir)
+            if fixed_exe_rel:
+                exe_rel = fixed_exe_rel
+                exe_enc = ""
         print("install_dir:", signals.install_dir)
         print("exe_relpath:", signals.exe_relpath)
         print("exe_enc_path:", signals.exe_enc_path)
@@ -779,12 +1252,42 @@ class GameCard(QWidget):
             QMessageBox.warning(self, "Erro", f"Pasta do jogo não encontrada:\n{install_dir}")
             return
 
-        exe_rel = (info.get("exe") or "").strip()  # ex: "Raft.exe" ou "Raft\\Raft.exe"
-        exe_enc = (info.get("exe_enc") or "").strip()  # caminho do .enc
+        exe_rel = (info.get("exe") or "").strip()
+        low = exe_rel.lower().replace("\\", "/")
+        launcher_escolhido = low.endswith("launcher.exe") or low.endswith("launcher1.exe")
+        exe_enc = (info.get("exe_enc") or "").strip()
 
-        if not exe_rel and exe_enc:
-            # fallback se por algum motivo não salvou exe_rel
-            exe_rel = find_best_exe(install_dir)
+        # recalcula se:
+        # - não existe exe salvo
+        # - ou o exe salvo parece suspeito (launcher/setup/rockstar/etc)
+        # - ou o arquivo salvo não existe mais
+        need_recalculate = False
+
+        if not exe_rel:
+            need_recalculate = True
+        elif not launcher_escolhido and exe_saved_is_suspicious(exe_rel):
+            need_recalculate = True
+        else:
+            exe_path_test = os.path.normpath(os.path.join(install_dir, exe_rel))
+            if not os.path.exists(exe_path_test) and not exe_enc:
+                need_recalculate = True
+
+        if need_recalculate:
+            new_exe_rel = find_best_exe_by_folder_name(install_dir)
+            if new_exe_rel:
+                exe_rel = new_exe_rel
+
+                # salva correção no instalados.json
+                data.setdefault(self.game_title, {})
+                data[self.game_title]["exe"] = exe_rel
+                save_installed(data)
+
+                # se existia exe_enc antigo, limpa referência para não apontar errado
+                if exe_saved_is_suspicious((info.get("exe") or "").strip()):
+                    data.setdefault(self.game_title, {})
+                    data[self.game_title]["exe_enc"] = ""
+                    save_installed(data)
+                    exe_enc = ""
 
         if not exe_rel:
             QMessageBox.warning(self, "Erro", "Não encontrei o executável do jogo (exe).")
@@ -825,21 +1328,25 @@ class GameCard(QWidget):
                 raise
 
         # ✅ 1) Se tem exe protegido: descriptografa SEM trocar nome (Unity precisa do nome certo)
+        # ✅ 1) Se tem exe protegido: descriptografa para o exe real e executa
         if exe_enc and os.path.exists(exe_enc):
             try:
-                # ✅ Descriptografa para o exe real do jogo (ex: Raft.exe)
                 decrypt_file_to(exe_enc, exe_path)
+
+                if not wait_file_ready(exe_path, timeout=10):
+                    raise Exception("O executável não ficou pronto para uso a tempo.")
 
                 p = _run_exe(exe_path)
 
-                # ✅ Opcional recomendado: limpar/reproteger quando fechar
                 def _cleanup_when_exit():
                     try:
-                        p.wait()
+                        if p is not None:
+                            p.wait()
+                        else:
+                            # caso tenha aberto via runas/UAC, espera um pouco
+                            time.sleep(20)
                     finally:
                         try:
-                            # aqui você escolhe: apagar exe descriptografado
-                            # (ou recriptografar de volta se você tiver função)
                             if os.path.exists(exe_path):
                                 os.remove(exe_path)
                         except Exception:
@@ -851,10 +1358,11 @@ class GameCard(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Erro", f"Não foi possível iniciar o jogo (protegido):\n{e}")
                 return
-
         # ✅ 2) Sem proteção (modo antigo): roda exe normal
         if os.path.exists(exe_path):
             try:
+                if not wait_file_ready(exe_path, timeout=10):
+                    raise Exception("O executável está indisponível ou bloqueado.")
                 _run_exe(exe_path)
                 return
             except Exception as e:
@@ -864,14 +1372,44 @@ class GameCard(QWidget):
         QMessageBox.warning(self, "Erro", f"Executável não encontrado:\n{exe_path}")
 
     def show_requirements(self):
-        texto = (self.descricao or "").strip()
-        if not texto:
-            texto = "Descrição / requisitos não informados."
+        req = self.requisitos or {}
 
-        # melhora a leitura: garante quebras e espaços
-        texto = texto.replace("\\n", "\n").strip()
+        def format_block(title, data):
+            if not data:
+                return ""
 
-        self._show_requirements_dialog("Requisitos", texto)
+            lines = [f"🎮 {title}:\n"]
+
+            if data.get("os"):
+                lines.append(f"Sistema: {data['os']}")
+            if data.get("cpu"):
+                lines.append(f"CPU: {data['cpu']}")
+            if data.get("ram"):
+                lines.append(f"RAM: {data['ram']} GB")
+            if data.get("gpu"):
+                lines.append(f"GPU: {data['gpu']}")
+            if data.get("dx"):
+                lines.append(f"DirectX: {data['dx']}")
+            if data.get("storage"):
+                lines.append(f"Espaço: {data['storage']} GB")
+
+            if data.get("notes"):
+                lines.append(f"\nObs: {data['notes']}")
+
+            return "\n".join(lines)
+
+        min_block = format_block("MÍNIMOS", req.get("min"))
+        rec_block = format_block("RECOMENDADOS", req.get("rec"))
+
+        texto_final = ""
+
+        if min_block or rec_block:
+            texto_final = f"{min_block}\n\n{rec_block}".strip()
+        else:
+            # fallback antigo
+            texto_final = (self.descricao or "").strip() or "Requisitos não informados."
+
+        self._show_requirements_dialog("Requisitos do Sistema", texto_final)
 
     def is_installed(self):
         data = load_installed()
@@ -935,43 +1473,6 @@ class GameCard(QWidget):
             background-color: #ff7777;
         }
         """)
-
-        def load_installed():
-            if not os.path.exists(JSON_INSTALLED):
-                return {}
-
-            try:
-                with open(JSON_INSTALLED, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-
-                # ✅ formato correto
-                if isinstance(data, dict):
-                    return data
-
-                # ✅ formato antigo: lista
-                if isinstance(data, list):
-                    converted = {}
-                    for item in data:
-                        if isinstance(item, dict):
-                            nome = (item.get("nome") or item.get("title") or "").strip()
-                            if not nome:
-                                continue
-                            converted[nome] = {
-                                "install_dir": item.get("install_dir", ""),
-                                "exe": item.get("exe", ""),
-                                "exe_enc": item.get("exe_enc", ""),
-                                "capa_url": item.get("capa_url", ""),
-                                "genero": item.get("genero", []),
-                                "descricao": item.get("descricao", "")
-                            }
-
-                    save_installed(converted)  # ✅ salva convertido
-                    return converted
-
-                return {}
-
-            except Exception:
-                return {}
 
 
 
@@ -1037,7 +1538,11 @@ QPushButton:hover {
         self.main_layout.addLayout(header)
 
         # NavBar
-        nav_callbacks = { "EXPLORAR": self.refresh_page, "INSTALADOS": self.open_instalados }
+        nav_callbacks = {
+            "EXPLORAR": self.refresh_page,
+            "INSTALADOS": self.open_instalados,
+            "DOWNLOADS": self.open_downloads
+        }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         self.main_layout.addWidget(self.nav_bar)
 
@@ -1092,6 +1597,12 @@ QPushButton:hover {
         # aplica filtros atuais (mantém layout consistente mesmo sem jogos)
         self.apply_filters()
 
+    def open_downloads(self):
+        from downloads import DownloadsPage
+        self.downloads_window = DownloadsPage(usuario_info=self.user_info)
+        self.downloads_window.show()
+        self.close()
+
     def open_profile(self):
         self.profile_window = ProfilePage(user_info=self.user_info)
         self.profile_window.show()
@@ -1141,10 +1652,32 @@ QPushButton:hover {
                 image_url=jogo.get("capa_url", ""),
                 title_top=jogo.get("nome", ""),
                 title_bottom="",
-                download_url=f"{API_BASE}/jogos/{jogo['id']}/download?user_id={uid}",
+                download_url=jogo.get("dropbox_token", "").strip(),
                 genres=jogo.get("genero", []),
                 user_info=self.user_info,
-                descricao=jogo.get("descricao", "")
+                descricao=jogo.get("descricao", ""),
+
+                # 🔥 NOVO
+                requisitos={
+                    "min": {
+                        "os": jogo.get("min_os"),
+                        "cpu": jogo.get("min_cpu"),
+                        "ram": jogo.get("min_ram_gb"),
+                        "gpu": jogo.get("min_gpu"),
+                        "dx": jogo.get("min_directx"),
+                        "storage": jogo.get("min_storage_gb"),
+                        "notes": jogo.get("min_notes"),
+                    },
+                    "rec": {
+                        "os": jogo.get("rec_os"),
+                        "cpu": jogo.get("rec_cpu"),
+                        "ram": jogo.get("rec_ram_gb"),
+                        "gpu": jogo.get("rec_gpu"),
+                        "dx": jogo.get("rec_directx"),
+                        "storage": jogo.get("rec_storage_gb"),
+                        "notes": jogo.get("rec_notes"),
+                    }
+                }
             )
 
             self.cards.append(card)
@@ -1167,13 +1700,48 @@ QPushButton:hover {
         if search_text is None or active_genres is None:
             search_text, active_genres = self.filter_bar.get_filters()
 
+        search_text = (search_text or "").lower().strip()
+
+        filtered_cards = []
+
+        # 1) filtra os cards
         for card in self.cards:
             title = card.game_title.lower()
+
             genre_match = True
             if active_genres:
-                # compara interseção de gêneros do card com selecionados
                 genre_match = any(g in card.genres for g in active_genres)
-            card.setVisible(search_text in title and genre_match)
+
+            text_match = search_text in title
+            visible = text_match and genre_match
+
+            card.setVisible(visible)
+
+            if visible:
+                filtered_cards.append(card)
+
+        # 2) limpa o grid atual
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        # 3) adiciona os cards filtrados em sequência
+        for idx, card in enumerate(filtered_cards):
+            row = idx // 5
+            col = idx % 5
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # 4) placeholders para manter alinhamento visual
+        total_slots = max(5, len(filtered_cards))
+        for idx in range(len(filtered_cards), total_slots):
+            row = idx // 5
+            col = idx % 5
+            placeholder = QLabel()
+            placeholder.setFixedSize(260, 485)
+            placeholder.setStyleSheet("background-color: transparent; border: none;")
+            self.grid_layout.addWidget(placeholder, row, col)
 
 
 
