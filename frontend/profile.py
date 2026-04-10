@@ -14,6 +14,8 @@ from api_config import API_BASE
 from session import load_session, save_session
 from utils import resource_path
 from navbar import NavBar
+from PyQt6.QtWidgets import QFrame
+from PyQt6.QtCore import QByteArray
 
 FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
@@ -39,6 +41,7 @@ class ProfilePage(QWidget):
         self.user_info.setdefault("plan", "Nenhum")
         self.user_info.setdefault("plan_active", False)
         self.user_info.setdefault("expires_at", None)
+        self.user_info.setdefault("avatar_url", "")
 
         # =========================
         # 2) TEMA
@@ -93,65 +96,84 @@ class ProfilePage(QWidget):
         main_layout.addWidget(self.nav_bar)
 
         # =========================
-        # FOTO + INFO
+        # CARD DO PERFIL
         # =========================
+        profile_card = QFrame()
+        profile_card.setStyleSheet("""
+            QFrame {
+                background-color: #120f2a;
+                border: 2px solid #2a245f;
+                border-radius: 22px;
+            }
+        """)
+        profile_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        card_layout = QVBoxLayout(profile_card)
+        card_layout.setContentsMargins(28, 28, 28, 28)
+        card_layout.setSpacing(18)
+
+        title = QLabel("Meu Perfil")
+        title.setStyleSheet("font-size: 28px; color: white; font-weight: bold;")
+        card_layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         profile_layout = QHBoxLayout()
-        profile_layout.setSpacing(20)
+        profile_layout.setSpacing(26)
         profile_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Avatar
         self.profile_pic = QLabel()
-        self.profile_pic.setFixedSize(130, 130)
-        self.profile_pic.setStyleSheet("border-radius: 65px; background-color: #444;")
+        self.profile_pic.setFixedSize(150, 150)
+        self.profile_pic.setStyleSheet("""
+            QLabel {
+                border-radius: 75px;
+                background-color: #1b1640;
+                border: 3px solid #836FFF;
+            }
+        """)
         self.profile_pic.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.profile_pic.mousePressEvent = lambda e: self.open_avatar_picker()
+        self._apply_avatar(self.user_info.get("avatar_url", ""))
 
-        default_avatar = resource_path("assets/profile_default.png")
-        pix = QPixmap(default_avatar)
-        if not pix.isNull():
-            self.profile_pic.setPixmap(
-                pix.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-            )
-
+        # info
         profile_info_layout = QVBoxLayout()
-        profile_info_layout.setSpacing(8)
+        profile_info_layout.setSpacing(10)
 
         self.name_label = QLabel(self.user_info.get("nome", "Usuário"))
-        self.name_label.setStyleSheet("font-size: 22px; font-weight: bold; color: white;")
+        self.name_label.setStyleSheet("font-size: 26px; font-weight: bold; color: white;")
 
         self.plan_label = QLabel("Plano Ativo: —")
-        self.plan_label.setStyleSheet("font-size: 16px; color: #ff5555;")
+        self.plan_label.setStyleSheet("font-size: 18px; color: #ff5555;")
 
         self.time_left_label = QLabel("Tempo restante: —")
         self.time_left_label.setStyleSheet("font-size: 18px; color: #e0d9ff;")
 
-        # token input
         self.token_input = QLineEdit()
         self.token_input.setPlaceholderText("Digite seu token aqui")
-        self.token_input.setFixedHeight(30)
-        self.token_input.setFixedWidth(220)
+        self.token_input.setFixedHeight(38)
+        self.token_input.setFixedWidth(280)
         self.token_input.setText(self.user_info.get("token", ""))
         self.token_input.setStyleSheet("""
             QLineEdit {
-                padding: 2px 6px;
-                border-radius: 6px;
+                padding: 6px 10px;
+                border-radius: 8px;
                 border: 1px solid #007eff;
-                background-color: #1e1e1e;
+                background-color: #0d0b1f;
                 color: white;
-                font-size: 12px;
+                font-size: 14px;
             }
         """)
 
         self.token_btn = QPushButton("Ativar Token")
-        self.token_btn.setFixedHeight(32)
-        self.token_btn.setFixedWidth(220)
+        self.token_btn.setFixedHeight(38)
+        self.token_btn.setFixedWidth(280)
         self.token_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.token_btn.setStyleSheet("""
             QPushButton {
                 background-color: #007eff;
                 color: white;
-                border-radius: 8px;
-                padding: 4px 10px;
-                font-size: 12px;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #005bb5;
@@ -159,27 +181,20 @@ class ProfilePage(QWidget):
         """)
         self.token_btn.clicked.connect(self.activate_token)
 
-        # add widgets (UMA VEZ SÓ)
-        profile_info_layout.addWidget(self.name_label)
-        profile_info_layout.addWidget(self.plan_label)
-        profile_info_layout.addWidget(self.time_left_label)
-        profile_info_layout.addWidget(self.token_input)
-        profile_info_layout.addWidget(self.token_btn)
-
         self.install_path_label = QLabel(f"Pasta de instalação:\n{get_install_root()}")
         self.install_path_label.setStyleSheet("font-size: 15px; color: #e0d9ff;")
 
         self.install_path_btn = QPushButton("Escolher local de instalação")
-        self.install_path_btn.setFixedHeight(34)
-        self.install_path_btn.setFixedWidth(220)
+        self.install_path_btn.setFixedHeight(38)
+        self.install_path_btn.setFixedWidth(280)
         self.install_path_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.install_path_btn.setStyleSheet("""
             QPushButton {
                 background-color: #836FFF;
                 color: white;
-                border-radius: 8px;
-                padding: 4px 10px;
-                font-size: 12px;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #6f55ff;
@@ -187,13 +202,62 @@ class ProfilePage(QWidget):
         """)
         self.install_path_btn.clicked.connect(self.choose_install_path)
 
+        self.avatar_btn = QPushButton("Alterar avatar")
+        self.avatar_btn.setFixedHeight(38)
+        self.avatar_btn.setFixedWidth(280)
+        self.avatar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.avatar_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a245f;
+                color: #e0d9ff;
+                border: 1px solid #836FFF;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #836FFF;
+                color: #0d0b1f;
+            }
+        """)
+        self.avatar_btn.clicked.connect(self.open_avatar_picker)
+
+        self.logout_btn = QPushButton("Sair da conta")
+        self.logout_btn.setFixedHeight(38)
+        self.logout_btn.setFixedWidth(280)
+        self.logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.logout_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 85, 85, 0.12);
+                color: #ffb3b3;
+                border: 1px solid #ff5555;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #ff5555;
+                color: #0d0b1f;
+            }
+        """)
+        self.logout_btn.clicked.connect(self.logout_user)
+
+        profile_info_layout.addWidget(self.name_label)
+        profile_info_layout.addWidget(self.plan_label)
+        profile_info_layout.addWidget(self.time_left_label)
+        profile_info_layout.addWidget(self.token_input)
+        profile_info_layout.addWidget(self.token_btn)
         profile_info_layout.addWidget(self.install_path_label)
         profile_info_layout.addWidget(self.install_path_btn)
+        profile_info_layout.addWidget(self.avatar_btn)
+        profile_info_layout.addWidget(self.logout_btn)
 
         profile_layout.addWidget(self.profile_pic)
         profile_layout.addLayout(profile_info_layout)
 
-        main_layout.addLayout(profile_layout)
+        card_layout.addLayout(profile_layout)
+
+        main_layout.addWidget(profile_card, alignment=Qt.AlignmentFlag.AlignCenter)
         main_layout.addStretch()
 
         self.setLayout(main_layout)
@@ -252,7 +316,6 @@ class ProfilePage(QWidget):
         self.token_input.setText(self.user_info.get("token", ""))
 
     def _persist_session(self):
-        # salva SOMENTE quando tiver algo para persistir (não no __init__)
         save_session({
             "id": self.user_info.get("id"),
             "nome": self.user_info.get("nome"),
@@ -260,7 +323,58 @@ class ProfilePage(QWidget):
             "plan": self.user_info.get("plan"),
             "plan_active": self.user_info.get("plan_active"),
             "expires_at": self.user_info.get("expires_at"),
+            "avatar_url": self.user_info.get("avatar_url"),
         })
+
+    def _get_avatar_options(self):
+        try:
+            response = httpx.get(f"{API_BASE}/avatars/disponiveis", timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("avatars", [])
+        except Exception:
+            pass
+
+        return []
+
+    def _pixmap_from_source(self, source: str, size: int = 130):
+        pixmap = QPixmap()
+
+        if not source:
+            return pixmap
+
+        if source.startswith("http://") or source.startswith("https://"):
+            try:
+                r = httpx.get(source, timeout=10)
+                if r.status_code == 200:
+                    pixmap.loadFromData(r.content)
+            except Exception:
+                return QPixmap()
+        else:
+            pixmap = QPixmap(source)
+
+        if pixmap.isNull():
+            return QPixmap()
+
+        return pixmap.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+    def _apply_avatar(self, source: str):
+        pix = self._pixmap_from_source(source, 150)
+        if pix.isNull():
+            default_avatar = resource_path("assets/profile_default.png")
+            pix = self._pixmap_from_source(default_avatar, 150)
+
+        if not pix.isNull():
+            self.profile_pic.setPixmap(pix)
+
+    def _save_avatar(self, source: str):
+        self.user_info["avatar_url"] = source
+        self._persist_session()
+        self._apply_avatar(source)
 
     def open_downloads(self):
         from downloads import DownloadsPage
@@ -274,27 +388,33 @@ class ProfilePage(QWidget):
     def open_avatar_picker(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Escolher Avatar")
-        dialog.setStyleSheet("background-color: #120f2a; color: #b9a9ff;")
+        dialog.setFixedSize(520, 420)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #120f2a;
+                color: #b9a9ff;
+            }
+        """)
 
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
 
         title = QLabel("Escolha um avatar")
-        title.setStyleSheet("font-size: 22px; color: #e0d9ff;")
-        layout.addWidget(title)
+        title.setStyleSheet("font-size: 24px; color: #e0d9ff; font-weight: bold;")
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        subtitle = QLabel("Selecione um ícone para o seu perfil")
+        subtitle.setStyleSheet("font-size: 16px; color: #b9a9ff;")
+        layout.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         grid = QGridLayout()
-        grid.setSpacing(12)
+        grid.setSpacing(14)
 
-        avatars = [
-            ("Astro", resource_path("assets/avatars/robo.png")),
-            ("Gamer", resource_path("assets/avatars/gamer.png")),
-            ("Robot", resource_path("assets/avatars/robot.png")),
-        ]
+        avatars = self._get_avatar_options()
 
         row = col = 0
-        for name, path in avatars:
+        for name, source in avatars:
             btn = QPushButton()
             btn.setFixedSize(110, 110)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -306,18 +426,18 @@ class ProfilePage(QWidget):
                 }
                 QPushButton:hover {
                     border: 2px solid #836FFF;
+                    background-color: #1b1640;
                 }
             """)
 
-            pix = QPixmap(path)
+            pix = self._pixmap_from_source(source, 96)
             if not pix.isNull():
-                pix2 = pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                btn.setIcon(QIcon(pix2))
+                btn.setIcon(QIcon(pix))
                 btn.setIconSize(QSize(96, 96))
 
-            btn.clicked.connect(lambda _, p=path: self._set_avatar_from_path(p, dialog))
-
+            btn.clicked.connect(lambda _, s=source: self._select_avatar_and_close(s, dialog))
             grid.addWidget(btn, row, col)
+
             col += 1
             if col == 3:
                 col = 0
@@ -339,22 +459,17 @@ class ProfilePage(QWidget):
                 background-color: #005bb5;
             }
         """)
-        custom_btn.clicked.connect(self.change_profile_picture)
+        custom_btn.clicked.connect(lambda: self.change_profile_picture(dialog))
         layout.addWidget(custom_btn)
 
         dialog.exec()
 
-    def _set_avatar_from_path(self, path, dialog=None):
-        pixmap = QPixmap(path).scaled(
-            130, 130,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        self.profile_pic.setPixmap(pixmap)
+    def _select_avatar_and_close(self, source, dialog=None):
+        self._save_avatar(source)
         if dialog:
             dialog.accept()
 
-    def change_profile_picture(self):
+    def change_profile_picture(self, dialog=None):
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Selecionar foto de perfil",
@@ -362,12 +477,9 @@ class ProfilePage(QWidget):
             "Imagens (*.png *.jpg *.jpeg)"
         )
         if file_name:
-            pixmap = QPixmap(file_name).scaled(
-                130, 130,
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.profile_pic.setPixmap(pixmap)
+            self._save_avatar(file_name)
+            if dialog:
+                dialog.accept()
 
     def choose_install_path(self):
         selected_folder = QFileDialog.getExistingDirectory(
@@ -399,6 +511,34 @@ class ProfilePage(QWidget):
     # =========================
     # Token
     # =========================
+
+    def logout_user(self):
+        confirm = QMessageBox.question(
+            self,
+            "Sair da conta",
+            "Deseja realmente sair da sua conta?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        save_session({})
+
+        try:
+            from login import LoginPage
+            self.login_window = LoginPage()
+            self.login_window.show()
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Aviso",
+                f"Sessão apagada com sucesso, mas não consegui abrir a tela de login.\n\nErro: {e}"
+            )
+
+        self.close()
+
+
     def activate_token(self):
         token = self.token_input.text().strip()
         if not token:

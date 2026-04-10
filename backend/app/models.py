@@ -104,3 +104,12 @@ class Subscription(Base):
     end_date = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="subscriptions")
+
+class Avatar(Base):
+    __tablename__ = "avatars"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, nullable=False)
+    image_url = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -15,6 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.models import TokenDB
 from app.models import DropboxCreds
 from datetime import datetime, timedelta
+from fastapi import HTTPException, Depends
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 print("✅ CARREGOU app/main.py")
 
@@ -399,9 +402,113 @@ class GameCreate(BaseModel):
 class TokenRequest(BaseModel):
     type: str
 
+class AvatarCreate(BaseModel):
+    nome: str
+    image_url: str
+    is_active: bool = True
+
+
+class AvatarUpdate(BaseModel):
+    nome: str
+    image_url: str
+    is_active: bool = True
+
 # ================================
 # ROTAS - JOGOS
 # ================================
+@app.post("/admin/adicionar_avatar")
+def adicionar_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
+    novo = models.Avatar(
+        nome=avatar.nome,
+        image_url=avatar.image_url,
+        is_active=avatar.is_active
+    )
+    db.add(novo)
+    db.commit()
+    db.refresh(novo)
+
+    return {
+        "message": "Avatar adicionado com sucesso",
+        "avatar": {
+            "id": novo.id,
+            "nome": novo.nome,
+            "image_url": novo.image_url,
+            "is_active": novo.is_active
+        }
+    }
+
+@app.get("/admin/listar_avatars")
+def listar_avatars(db: Session = Depends(get_db)):
+    avatars = db.query(models.Avatar).order_by(models.Avatar.id.desc()).all()
+
+    return {
+        "avatars": [
+            {
+                "id": a.id,
+                "nome": a.nome,
+                "image_url": a.image_url,
+                "is_active": a.is_active
+            }
+            for a in avatars
+        ]
+    }
+
+@app.get("/avatars/disponiveis")
+def avatars_disponiveis(db: Session = Depends(get_db)):
+    avatars = (
+        db.query(models.Avatar)
+        .filter(models.Avatar.is_active == True)
+        .order_by(models.Avatar.id.desc())
+        .all()
+    )
+
+    return {
+        "avatars": [
+            {
+                "id": a.id,
+                "nome": a.nome,
+                "image_url": a.image_url
+            }
+            for a in avatars
+        ]
+    }
+
+@app.put("/admin/editar_avatar/{avatar_id}")
+def editar_avatar(avatar_id: int, avatar: AvatarUpdate, db: Session = Depends(get_db)):
+    db_avatar = db.query(models.Avatar).filter(models.Avatar.id == avatar_id).first()
+
+    if not db_avatar:
+        raise HTTPException(status_code=404, detail="Avatar não encontrado")
+
+    db_avatar.nome = avatar.nome
+    db_avatar.image_url = avatar.image_url
+    db_avatar.is_active = avatar.is_active
+
+    db.commit()
+    db.refresh(db_avatar)
+
+    return {
+        "message": "Avatar atualizado com sucesso",
+        "avatar": {
+            "id": db_avatar.id,
+            "nome": db_avatar.nome,
+            "image_url": db_avatar.image_url,
+            "is_active": db_avatar.is_active
+        }
+    }
+
+@app.delete("/admin/deletar_avatar/{avatar_id}")
+def deletar_avatar(avatar_id: int, db: Session = Depends(get_db)):
+    db_avatar = db.query(models.Avatar).filter(models.Avatar.id == avatar_id).first()
+
+    if not db_avatar:
+        raise HTTPException(status_code=404, detail="Avatar não encontrado")
+
+    db.delete(db_avatar)
+    db.commit()
+
+    return {"message": "Avatar deletado com sucesso"}
+
 @app.post("/admin/adicionar_jogo")
 def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
 

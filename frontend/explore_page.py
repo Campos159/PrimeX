@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import re
 import psutil
+from PyQt6.QtGui import QShortcut, QKeySequence
 
 
 
@@ -1554,6 +1555,33 @@ QPushButton:hover {
         )
         self.main_layout.addWidget(self.filter_bar)
 
+        # Botão de atualizar / F5
+        refresh_row = QHBoxLayout()
+        refresh_row.setContentsMargins(0, 0, 0, 0)
+        refresh_row.addStretch()
+
+        self.refresh_btn = QPushButton("🔄 Atualizar")
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_btn.setFixedHeight(42)
+        self.refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a245f;
+                color: #e0d9ff;
+                border: 1px solid #836FFF;
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #836FFF;
+                color: #0d0b1f;
+            }
+        """)
+        self.refresh_btn.clicked.connect(self.reload_games)
+
+        refresh_row.addWidget(self.refresh_btn)
+        self.main_layout.addLayout(refresh_row)
+
         # Grid
         # ===== SCROLL + GRID =====
         self.scroll_area = QScrollArea()
@@ -1592,10 +1620,29 @@ QPushButton:hover {
         self.setMinimumSize(720, 480)
         self.showMaximized()
 
+        # Atalho F5 para recarregar
+        self.shortcut_refresh = QShortcut(QKeySequence("F5"), self)
+        self.shortcut_refresh.activated.connect(self.reload_games)
+
         self.cards = []
         self.load_games()
         # aplica filtros atuais (mantém layout consistente mesmo sem jogos)
         self.apply_filters()
+
+    def reload_games(self):
+        try:
+            self.refresh_btn.setText("ATUALIZANDO...")
+            self.refresh_btn.setEnabled(False)
+
+            self.load_games()
+            self.apply_filters()
+
+        except Exception as e:
+            QMessageBox.warning(self, "Erro", f"Falha ao atualizar jogos:\n{e}")
+
+        finally:
+            self.refresh_btn.setText("🔄 Atualizar")
+            self.refresh_btn.setEnabled(True)
 
     def open_downloads(self):
         from downloads import DownloadsPage
