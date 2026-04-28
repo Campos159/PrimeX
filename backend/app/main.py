@@ -379,6 +379,7 @@ class GameCreate(BaseModel):
     nome: str
     descricao: str
     dropbox_token: str
+    exe_principal: str | None = None
     capa_url: str | None = None
     banner_url: str | None = None
     screenshot_1_url: str | None = None
@@ -521,6 +522,7 @@ def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
         nome=jogo.nome,
         descricao=jogo.descricao,
         dropbox_token=dropbox_path,
+        exe_principal=jogo.exe_principal or "",
         capa_url=jogo.capa_url or "",
         banner_url=jogo.banner_url or "",
         screenshot_1_url=jogo.screenshot_1_url or "",
@@ -558,6 +560,7 @@ def listar_jogos(db: Session = Depends(get_db)):
             "nome": j.nome,
             "descricao": j.descricao,
             "dropbox_token": j.dropbox_token,
+            "exe_principal": j.exe_principal,
             "capa_url": j.capa_url,
             "banner_url": j.banner_url,
             "screenshot_1_url": j.screenshot_1_url,
@@ -594,6 +597,7 @@ def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
     db_jogo.nome = jogo.nome
     db_jogo.descricao = jogo.descricao
     db_jogo.dropbox_token = dropbox_path
+    db_jogo.exe_principal = jogo.exe_principal or ""
     db_jogo.capa_url = jogo.capa_url or ""
     db_jogo.banner_url = jogo.banner_url or ""
     db_jogo.screenshot_1_url = jogo.screenshot_1_url or ""

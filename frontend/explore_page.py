@@ -304,7 +304,7 @@ class ImageLoaderTask(QRunnable):
         self.signals.finished.emit(self.url, data)
 
 class GameCard(QWidget):
-    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao="", requisitos=None):
+    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao="", requisitos=None, exe_principal=""):
 
         super().__init__()
 
@@ -323,6 +323,7 @@ class GameCard(QWidget):
         self.image_url = image_url
         self.genres = genres or []
         self.descricao = descricao
+        self.exe_principal = (exe_principal or "").strip()
 
         download_manager.download_updated.connect(self._on_global_download_updated)
         download_manager.download_finished.connect(self._on_global_download_finished)
@@ -1149,7 +1150,8 @@ class GameCard(QWidget):
             game_name=self.game_title,
             download_url=self.download_url,
             image_url=self.image_url,
-            genres=self.genres
+            genres=self.genres,
+            exe_principal=self.exe_principal
         )
 
         self.btn_install.setText("NA FILA")
@@ -1161,6 +1163,14 @@ class GameCard(QWidget):
         # aqui o downloader já tentou detectar exe e proteger
         exe_rel = getattr(signals, "exe_relpath", "") or ""
         exe_enc = getattr(signals, "exe_enc_path", "") or ""
+
+        if self.exe_principal:
+            exe_manual = os.path.normpath(self.exe_principal)
+            exe_manual_path = os.path.normpath(os.path.join(install_dir, exe_manual))
+
+            if os.path.exists(exe_manual_path):
+                exe_rel = exe_manual
+                exe_enc = ""
 
         # segurança extra: se vier exe suspeito, recalcula localmente
         if not exe_rel or exe_saved_is_suspicious(exe_rel):
@@ -1176,11 +1186,12 @@ class GameCard(QWidget):
         data = load_installed()
         data[self.game_title] = {
             "install_dir": install_dir,
-            "exe": exe_rel,
+            "exe": self.exe_principal or exe_rel,
             "exe_enc": exe_enc,
             "capa_url": self.image_url or "",
             "genero": self.genres or [],
-            "descricao": self.descricao or ""  # ✅
+            "descricao": self.descricao or "",  # ✅
+            "exe_principal": self.exe_principal or "",
         }
         save_installed(data)
 
@@ -2382,8 +2393,6 @@ class MainWindow(QWidget):
 
             destaque_layout.addWidget(self.destaque_main, stretch=3)
 
-            destaque_layout.addWidget(self.destaque_main, stretch=3)
-
             # ===== LADO DIREITO =====
             side_layout = QVBoxLayout()
             side_layout.setSpacing(10)
@@ -2430,6 +2439,27 @@ class MainWindow(QWidget):
                 self.destaque_timer.stop()
 
         for idx, jogo in enumerate(jogos_data):
+            requisitos = {
+                "min": {
+                    "os": jogo.get("min_os"),
+                    "cpu": jogo.get("min_cpu"),
+                    "ram": jogo.get("min_ram_gb"),
+                    "gpu": jogo.get("min_gpu"),
+                    "dx": jogo.get("min_directx"),
+                    "storage": jogo.get("min_storage_gb"),
+                    "notes": jogo.get("min_notes"),
+                },
+                "rec": {
+                    "os": jogo.get("rec_os"),
+                    "cpu": jogo.get("rec_cpu"),
+                    "ram": jogo.get("rec_ram_gb"),
+                    "gpu": jogo.get("rec_gpu"),
+                    "dx": jogo.get("rec_directx"),
+                    "storage": jogo.get("rec_storage_gb"),
+                    "notes": jogo.get("rec_notes"),
+                }
+            }
+
             card = GameCard(
                 image_url=jogo.get("capa_url", ""),
                 title_top=jogo.get("nome", ""),
@@ -2438,29 +2468,16 @@ class MainWindow(QWidget):
                 genres=jogo.get("genero", []),
                 user_info=self.user_info,
                 descricao=jogo.get("descricao", ""),
-
-                # 🔥 NOVO
-                requisitos={
-                    "min": {
-                        "os": jogo.get("min_os"),
-                        "cpu": jogo.get("min_cpu"),
-                        "ram": jogo.get("min_ram_gb"),
-                        "gpu": jogo.get("min_gpu"),
-                        "dx": jogo.get("min_directx"),
-                        "storage": jogo.get("min_storage_gb"),
-                        "notes": jogo.get("min_notes"),
-                    },
-                    "rec": {
-                        "os": jogo.get("rec_os"),
-                        "cpu": jogo.get("rec_cpu"),
-                        "ram": jogo.get("rec_ram_gb"),
-                        "gpu": jogo.get("rec_gpu"),
-                        "dx": jogo.get("rec_directx"),
-                        "storage": jogo.get("rec_storage_gb"),
-                        "notes": jogo.get("rec_notes"),
-                    }
-                }
+                requisitos=requisitos,
+                exe_principal=jogo.get("exe_principal", "")
             )
+
+            self.cards.append(card)
+            self.load_card_image_async(card)
+
+            row = idx // 5
+            col = idx % 5
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
 
             self.cards.append(card)
             self.load_card_image_async(card)

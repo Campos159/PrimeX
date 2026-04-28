@@ -197,7 +197,7 @@ class DownloadManager(QObject):
         self.current_signals = None
         self._lock = threading.Lock()
 
-    def enqueue_download(self, game_name: str, download_url: str, image_url: str = "", genres=None, descricao=""):
+    def enqueue_download(self, game_name: str, download_url: str, image_url: str = "", genres=None, descricao="", exe_principal=""):
         with self._lock:
             # evita duplicar se já está em andamento/fila
             if game_name in self.downloads:
@@ -212,6 +212,7 @@ class DownloadManager(QObject):
                 "image_url": image_url,
                 "genres": genres or [],
                 "descricao": descricao or "",
+                "exe_principal": (exe_principal or "").strip(),
                 "progress": 0,
                 "status": "na_fila",
                 "speed": "",
@@ -344,6 +345,17 @@ class DownloadManager(QObject):
         exe_rel = getattr(signals, "exe_relpath", "") or ""
         exe_enc = getattr(signals, "exe_enc_path", "") or ""
 
+        current = self.downloads.get(game_name, {})
+        exe_principal = (current.get("exe_principal") or "").strip()
+
+        if exe_principal:
+            exe_manual = os.path.normpath(exe_principal)
+            exe_manual_path = os.path.normpath(os.path.join(install_dir, exe_manual))
+
+            if os.path.exists(exe_manual_path):
+                exe_rel = exe_manual
+                exe_enc = ""
+
         low = exe_rel.lower().replace("\\", "/")
 
         # se o downloader escolheu launcher explícito, respeita
@@ -356,16 +368,16 @@ class DownloadManager(QObject):
                     exe_rel = fixed_exe_rel
                     exe_enc = ""
 
-        current = self.downloads.get(game_name, {})
 
         data = load_installed()
         data[game_name] = {
             "install_dir": install_dir,
-            "exe": exe_rel,
+            "exe": exe_principal or exe_rel,
             "exe_enc": exe_enc,
             "capa_url": current.get("image_url", "") or "",
             "genero": current.get("genres", []) or [],
-            "descricao": current.get("descricao", "") or ""
+            "descricao": current.get("descricao", "") or "",
+            "exe_principal": exe_principal or ""
         }
         save_installed(data)
 

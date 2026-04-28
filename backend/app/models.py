@@ -25,6 +25,7 @@ class Game(Base):
     nome = Column(String, index=True, nullable=False)
     descricao = Column(Text, default="")
     dropbox_token = Column(String, nullable=False)
+    exe_principal = Column(String, default="")
     capa_url = Column(String, default="")
     banner_url = Column(Text, default="")
     screenshot_1_url = Column(Text, default="")

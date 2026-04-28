@@ -830,6 +830,7 @@ class AdminPage(QWidget):
             "nome": (self.game_name.text() or "").strip(),
             "descricao": (self.game_desc.toPlainText() or "").strip(),
             "dropbox_token": (self.game_dropbox.text() or "").strip(),
+            "exe_principal": (self.game_exe.text() or "").strip(),
             "capa_url": (self.game_cover.text() or "").strip(),
             "banner_url": (self.game_banner.text() or "").strip(),
             "screenshot_1_url": (self.game_screenshot_1.text() or "").strip(),
@@ -856,6 +857,7 @@ class AdminPage(QWidget):
         self.game_name.clear()
         self.game_desc.clear()
         self.game_dropbox.clear()
+        self.game_exe.clear()
         self.game_cover.clear()
         self.game_banner.clear()
         self.game_screenshot_1.clear()
@@ -922,6 +924,10 @@ class AdminPage(QWidget):
 
         self.game_dropbox = self._make_line_edit("Token, caminho ou link do arquivo")
         layout.addWidget(self.game_dropbox)
+
+        self.game_exe = self._make_line_edit(
+            "Executável principal (opcional) Ex: Game.exe ou Binaries\\Win64\\Game.exe")
+        layout.addWidget(self.game_exe)
 
         self.game_cover = self._make_line_edit("URL da capa (opcional)")
         layout.addWidget(self.game_cover)
@@ -1187,6 +1193,12 @@ class AdminPage(QWidget):
             token_input = self._make_line_edit("Token/caminho/link do jogo", jogo.get("dropbox_token", ""))
             layout.addWidget(token_input)
 
+            exe_input = self._make_line_edit(
+                "Executável principal (opcional) Ex: Game.exe ou Binaries\\Win64\\Game.exe",
+                jogo.get("exe_principal", "")
+            )
+            layout.addWidget(exe_input)
+
             capa_input = self._make_line_edit("URL da capa", jogo.get("capa_url", ""))
             layout.addWidget(capa_input)
 
@@ -1247,6 +1259,7 @@ class AdminPage(QWidget):
                     "nome": (nome_input.text() or "").strip(),
                     "descricao": (desc_input.toPlainText() or "").strip(),
                     "dropbox_token": (token_input.text() or "").strip(),
+                    "exe_principal": (exe_input.text() or "").strip(),
                     "capa_url": (capa_input.text() or "").strip(),
                     "banner_url": (banner_input.text() or "").strip(),
                     "screenshot_1_url": (screenshot_1_input.text() or "").strip(),
