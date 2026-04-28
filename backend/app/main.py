@@ -380,6 +380,9 @@ class GameCreate(BaseModel):
     descricao: str
     dropbox_token: str
     capa_url: str | None = None
+    banner_url: str | None = None
+    screenshot_1_url: str | None = None
+    screenshot_2_url: str | None = None
 
     # mínimos
     min_os: str = ""
@@ -519,6 +522,9 @@ def adicionar_jogo(jogo: GameCreate, db: Session = Depends(get_db)):
         descricao=jogo.descricao,
         dropbox_token=dropbox_path,
         capa_url=jogo.capa_url or "",
+        banner_url=jogo.banner_url or "",
+        screenshot_1_url=jogo.screenshot_1_url or "",
+        screenshot_2_url=jogo.screenshot_2_url or "",
 
         min_os=jogo.min_os,
         min_cpu=jogo.min_cpu,
@@ -553,6 +559,9 @@ def listar_jogos(db: Session = Depends(get_db)):
             "descricao": j.descricao,
             "dropbox_token": j.dropbox_token,
             "capa_url": j.capa_url,
+            "banner_url": j.banner_url,
+            "screenshot_1_url": j.screenshot_1_url,
+            "screenshot_2_url": j.screenshot_2_url,
 
             "min_os": j.min_os,
             "min_cpu": j.min_cpu,
@@ -586,6 +595,9 @@ def editar_jogo(jogo_id: int, jogo: GameCreate, db: Session = Depends(get_db)):
     db_jogo.descricao = jogo.descricao
     db_jogo.dropbox_token = dropbox_path
     db_jogo.capa_url = jogo.capa_url or ""
+    db_jogo.banner_url = jogo.banner_url or ""
+    db_jogo.screenshot_1_url = jogo.screenshot_1_url or ""
+    db_jogo.screenshot_2_url = jogo.screenshot_2_url or ""
 
     db_jogo.min_os = jogo.min_os
     db_jogo.min_cpu = jogo.min_cpu

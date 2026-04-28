@@ -26,6 +26,9 @@ class Game(Base):
     descricao = Column(Text, default="")
     dropbox_token = Column(String, nullable=False)
     capa_url = Column(String, default="")
+    banner_url = Column(Text, default="")
+    screenshot_1_url = Column(Text, default="")
+    screenshot_2_url = Column(Text, default="")
 
     # Requisitos mínimos
     min_os = Column(String, default="")

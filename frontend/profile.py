@@ -16,6 +16,7 @@ from utils import resource_path
 from navbar import NavBar
 from PyQt6.QtWidgets import QFrame
 from PyQt6.QtCore import QByteArray
+from PyQt6.QtGui import QPainter, QPainterPath
 
 FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
@@ -23,6 +24,8 @@ FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 class ProfilePage(QWidget):
     def __init__(self, user_info=None):
         super().__init__()
+
+        self._navigating = False
 
         # =========================
         # 1) USER INFO + PERSISTÊNCIA (CORRETO)
@@ -363,13 +366,66 @@ class ProfilePage(QWidget):
         )
 
     def _apply_avatar(self, source: str):
-        pix = self._pixmap_from_source(source, 150)
+        size = 150
+        inner_margin = 5
+        x_offset = 0  # negativo = puxa para a esquerda
+        y_offset = 0
+
+        pix = self._pixmap_from_source(source, size)
+
         if pix.isNull():
             default_avatar = resource_path("assets/profile_default.png")
-            pix = self._pixmap_from_source(default_avatar, 150)
+            pix = self._pixmap_from_source(default_avatar, size)
 
-        if not pix.isNull():
-            self.profile_pic.setPixmap(pix)
+        if pix.isNull():
+            return
+
+        # recorte central quadrado
+        w = pix.width()
+        h = pix.height()
+        side = min(w, h)
+
+        x = (w - side) // 2
+        y = (h - side) // 2
+
+        cropped = pix.copy(x, y, side, side)
+
+        cropped = cropped.scaled(
+            size, size,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        rounded = QPixmap(size, size)
+        rounded.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        path = QPainterPath()
+        path.addEllipse(
+            inner_margin,
+            inner_margin,
+            size - (inner_margin * 2),
+            size - (inner_margin * 2)
+        )
+        painter.setClipPath(path)
+
+        draw_size = size - (inner_margin * 2)
+
+        painter.drawPixmap(
+            inner_margin + x_offset,
+            inner_margin + y_offset,
+            draw_size,
+            draw_size,
+            cropped
+        )
+
+        painter.end()
+
+        self.profile_pic.setPixmap(rounded)
+        self.profile_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def _save_avatar(self, source: str):
         self.user_info["avatar_url"] = source
@@ -377,10 +433,23 @@ class ProfilePage(QWidget):
         self._apply_avatar(source)
 
     def open_downloads(self):
-        from downloads import DownloadsPage
-        self.downloads_window = DownloadsPage(usuario_info=self.user_info)
-        self.downloads_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self._navigating = True
+
+        try:
+            from downloads import DownloadsPage
+            self.downloads_window = DownloadsPage(usuario_info=self.user_info)
+            self.downloads_window.show()
+
+            self.hide()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(300, self.close)
+
+        except Exception as e:
+            self._navigating = False
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir Downloads:\n{e}")
 
     # =========================
     # Avatares
@@ -413,11 +482,21 @@ class ProfilePage(QWidget):
 
         avatars = self._get_avatar_options()
 
+        if not avatars:
+            empty_label = QLabel("Nenhum avatar disponível no momento.")
+            empty_label.setStyleSheet("font-size: 16px; color: #e0d9ff;")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(empty_label)
+
         row = col = 0
-        for name, source in avatars:
+        for avatar in avatars:
+            name = avatar.get("nome", "")
+            source = avatar.get("image_url", "")
+
             btn = QPushButton()
             btn.setFixedSize(110, 110)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(name)
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #0d0b1f;
@@ -526,8 +605,8 @@ class ProfilePage(QWidget):
         save_session({})
 
         try:
-            from login import LoginPage
-            self.login_window = LoginPage()
+            from login import LoginWindow
+            self.login_window = LoginWindow()
             self.login_window.show()
         except Exception as e:
             QMessageBox.warning(
@@ -589,16 +668,42 @@ class ProfilePage(QWidget):
     # Navbar callbacks
     # =========================
     def open_explore_page(self):
-        from explore_page import MainWindow
-        self.explore_window = MainWindow(usuario_info=self.user_info)
-        self.explore_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self._navigating = True
+
+        try:
+            from explore_page import MainWindow
+            self.explore_window = MainWindow(usuario_info=self.user_info)
+            self.explore_window.show()
+
+            self.hide()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(300, self.close)
+
+        except Exception as e:
+            self._navigating = False
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir Explorar:\n{e}")
 
     def open_instalados(self):
-        from installed import InstaladosPage
-        self.installed_window = InstaladosPage(usuario_info=self.user_info)
-        self.installed_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self._navigating = True
+
+        try:
+            from installed import InstaladosPage
+            self.installed_window = InstaladosPage(usuario_info=self.user_info)
+            self.installed_window.show()
+
+            self.hide()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(300, self.close)
+
+        except Exception as e:
+            self._navigating = False
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir Instalados:\n{e}")
 
 
 if __name__ == "__main__":

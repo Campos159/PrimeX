@@ -1,14 +1,15 @@
 import os
 import sys
 import json
-
+from PyQt6.QtGui import QPainter, QPainterPath
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy
 )
-from PyQt6.QtCore import Qt
+import requests
 from PyQt6.QtGui import QFontDatabase
-
+from PyQt6.QtGui import QPixmap, QIcon
+from PyQt6.QtCore import Qt, QSize, QTimer
 from navbar import NavBar
 from profile import ProfilePage
 from filter_bar import FilterBar
@@ -36,6 +37,7 @@ JSON_INSTALLED = os.path.join(GAMES_DIR, "instalados.json")
 class InstaladosPage(QWidget):
     def __init__(self, usuario_info=None):
         super().__init__()
+        self._navigating = False
 
         self.user_info = usuario_info or {
             "id": "usuario123",
@@ -62,30 +64,37 @@ class InstaladosPage(QWidget):
         # =========================
         # HEADER
         # =========================
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.addStretch()
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addStretch()
 
-        user_btn = QPushButton(f"👤 {self.user_info.get('nome', 'Usuário')}")
+        user_btn = QPushButton(self.user_info.get("nome", "Usuário"))
         user_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        user_btn.setFixedHeight(46)
         user_btn.setStyleSheet("""
             QPushButton {
                 border: 2px solid #836FFF;
-                border-radius: 15px;
-                color: #b9a9ff;
-                font-size: 18px;
-                padding: 6px 14px;
+                border-radius: 18px;
+                color: #e0d9ff;
+                font-size: 17px;
+                font-weight: bold;
+                padding: 6px 14px 6px 10px;
+                text-align: left;
+                background-color: transparent;
             }
             QPushButton:hover {
-                background-color: #836FFF;
-                color: #0d0b1f;
-                box-shadow: 0 0 10px #836FFF;
+                background-color: rgba(131, 111, 255, 0.12);
             }
         """)
-        user_btn.clicked.connect(self.open_profile)
 
-        header_layout.addWidget(user_btn)
-        self.main_layout.addLayout(header_layout)
+        avatar_pix = self._make_round_avatar(self.user_info.get("avatar_url", ""), 28)
+        if not avatar_pix.isNull():
+            user_btn.setIcon(QIcon(avatar_pix))
+            user_btn.setIconSize(QSize(28, 28))
+
+        user_btn.clicked.connect(self.open_profile)
+        header.addWidget(user_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        self.main_layout.addLayout(header)
 
         # =========================
         # NAVBAR
@@ -164,28 +173,116 @@ class InstaladosPage(QWidget):
     # NAV ACTIONS
     # =========================
 
-    def open_downloads(self):
-        from downloads import DownloadsPage
-        self.downloads_window = DownloadsPage(usuario_info=self.user_info)
-        self.downloads_window.show()
-        self.close()
+    def _safe_open_window(self, create_window_func, error_title="Erro"):
+        if getattr(self, "_navigating", False):
+            return
 
+        self._navigating = True
+
+        try:
+            if hasattr(self, "nav_bar"):
+                self.nav_bar.setEnabled(False)
+
+            # desativa todos os botões da tela imediatamente
+            for btn in self.findChildren(QPushButton):
+                btn.setEnabled(False)
+
+            new_window = create_window_func()
+            self._next_window = new_window
+
+            self.hide()
+            new_window.show()
+
+            QTimer.singleShot(100, self.close)
+
+        except Exception as e:
+            self._navigating = False
+
+            if hasattr(self, "nav_bar"):
+                self.nav_bar.setEnabled(True)
+
+            for btn in self.findChildren(QPushButton):
+                btn.setEnabled(True)
+
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, error_title, f"{e}")
+
+    def open_downloads(self):
+        def create():
+            from downloads import DownloadsPage
+            return DownloadsPage(usuario_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Downloads")
 
     def open_profile(self):
-        self.profile_window = ProfilePage(user_info=self.user_info)
-        self.profile_window.show()
-        self.close()
+        def create():
+            return ProfilePage(user_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Perfil")
 
     def open_explore(self):
-        from explore_page import MainWindow
-        self.explore_window = MainWindow(usuario_info=self.user_info)
-        self.explore_window.show()
-        self.close()
+        def create():
+            from explore_page import MainWindow
+            return MainWindow(usuario_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Explorar")
 
     def reload_page(self):
-        self.new_window = InstaladosPage(usuario_info=self.user_info)
-        self.new_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self.load_installed_games()
+        self.apply_filters()
+
+    def _pixmap_from_source(self, source: str, size: int = 36):
+        pixmap = QPixmap()
+
+        if not source:
+            return pixmap
+
+        if source.startswith("http://") or source.startswith("https://"):
+            try:
+                r = requests.get(source, timeout=8)
+                if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
+                    pixmap.loadFromData(r.content)
+            except Exception:
+                return QPixmap()
+        else:
+            pixmap = QPixmap(source)
+
+        if pixmap.isNull():
+            return QPixmap()
+
+        return pixmap.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+    def _make_round_avatar(self, source: str, size: int = 36):
+        pix = self._pixmap_from_source(source, size)
+
+        if pix.isNull():
+            default_avatar = resource_path("assets/profile_default.png")
+            pix = self._pixmap_from_source(default_avatar, size)
+
+        if pix.isNull():
+            return QPixmap()
+
+        rounded = QPixmap(size, size)
+        rounded.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        path = QPainterPath()
+        path.addEllipse(0, 0, size, size)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pix)
+        painter.end()
+
+        return rounded
 
     # =========================
     # LOAD INSTALLED GAMES

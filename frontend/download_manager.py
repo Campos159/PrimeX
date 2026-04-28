@@ -3,7 +3,7 @@ import json
 import threading
 
 from PyQt6.QtCore import QObject, pyqtSignal
-
+import shutil
 from downloader import baixar_jogo
 
 
@@ -150,6 +150,39 @@ def exe_saved_is_suspicious(exe_rel: str) -> bool:
 # =========================
 # DOWNLOAD MANAGER
 # =========================
+
+def _safe_game_name(game_name: str) -> str:
+    return "".join(c for c in game_name if c not in r'\/:*?"<>|').strip()
+
+
+def cleanup_download_files(game_name: str):
+    safe_name = _safe_game_name(game_name)
+    if not safe_name:
+        return
+
+    install_dir = os.path.join(GAMES_DIR, safe_name)
+    temp_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip.part")
+    final_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip")
+    meta_path = temp_zip + ".meta"
+
+    for path in [temp_zip, final_zip, meta_path]:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    # remove pasta parcial apenas se o jogo NÃO estiver instalado corretamente
+    try:
+        installed = load_installed()
+        is_registered = game_name in installed
+
+        if not is_registered and os.path.isdir(install_dir):
+            shutil.rmtree(install_dir, ignore_errors=True)
+
+    except Exception:
+        pass
+
 class DownloadManager(QObject):
     download_updated = pyqtSignal(str, dict)   # game_name, dados
     download_finished = pyqtSignal(str)
@@ -181,6 +214,10 @@ class DownloadManager(QObject):
                 "descricao": descricao or "",
                 "progress": 0,
                 "status": "na_fila",
+                "speed": "",
+                "eta": "",
+                "paused": False,
+                "cancelled": False,
                 "error": "",
                 "install_dir": "",
                 "exe": "",
@@ -224,7 +261,19 @@ class DownloadManager(QObject):
             return
         self.current_signals = signals
 
+        # entrega controles para o downloader, se ele suportar
+        if hasattr(signals, "pause_event"):
+            signals.pause_event.clear()
+
+        if hasattr(signals, "cancel_event"):
+            signals.cancel_event.clear()
+
         signals.progress.connect(lambda pct, g=game_name: self._on_progress(g, pct))
+        if hasattr(signals, "speed"):
+            signals.speed.connect(lambda speed, g=game_name: self._on_speed(g, speed))
+
+        if hasattr(signals, "eta"):
+            signals.eta.connect(lambda eta, g=game_name: self._on_eta(g, eta))
         signals.finished.connect(lambda g=game_name, s=signals: self._on_finished(g, s))
         signals.error.connect(lambda msg, g=game_name: self._on_error(g, msg))
         signals.status.connect(lambda status, g=game_name: self._on_status(g, status))
@@ -246,15 +295,48 @@ class DownloadManager(QObject):
 
         self.download_updated.emit(game_name, item)
 
+    def _on_eta(self, game_name: str, eta_text: str):
+        with self._lock:
+            if game_name not in self.downloads:
+                return
+
+            self.downloads[game_name]["eta"] = eta_text
+            item = dict(self.downloads[game_name])
+
+        self.download_updated.emit(game_name, item)
+
+    def _on_speed(self, game_name: str, speed_text: str):
+        with self._lock:
+            if game_name not in self.downloads:
+                return
+
+            self.downloads[game_name]["speed"] = speed_text
+            item = dict(self.downloads[game_name])
+
+        self.download_updated.emit(game_name, item)
+
     def _on_status(self, game_name: str, status: str):
         with self._lock:
             if game_name not in self.downloads:
                 return
 
             self.downloads[game_name]["status"] = status
+
+            if status != "baixando":
+                self.downloads[game_name]["speed"] = ""
+                self.downloads[game_name]["eta"] = ""
+
             item = dict(self.downloads[game_name])
 
+            if status == "cancelado":
+                self.current_download = None
+                self.current_signals = None
+
         self.download_updated.emit(game_name, item)
+
+        if status == "cancelado":
+            self.queue_updated.emit()
+            self._process_queue()
 
     def _save_finished_install(self, game_name: str, signals):
         install_dir = os.path.normpath(signals.install_dir or os.path.join(GAMES_DIR, game_name))
@@ -309,6 +391,9 @@ class DownloadManager(QObject):
                     self.downloads[game_name]["exe_enc"] = exe_enc
                     self.downloads[game_name]["progress"] = 100
                     self.downloads[game_name]["status"] = "concluido"
+                    self.downloads[game_name]["speed"] = ""
+                    self.downloads[game_name]["paused"] = False
+                    self.downloads[game_name]["cancelled"] = False
                     self.downloads[game_name]["error"] = ""
                     item = dict(self.downloads[game_name])
                 else:
@@ -330,6 +415,8 @@ class DownloadManager(QObject):
             if game_name in self.downloads:
                 self.downloads[game_name]["status"] = "erro"
                 self.downloads[game_name]["error"] = str(msg)
+                self.downloads[game_name]["speed"] = ""
+                self.downloads[game_name]["paused"] = False
                 item = dict(self.downloads[game_name])
             else:
                 item = {}
@@ -359,19 +446,117 @@ class DownloadManager(QObject):
             if game_name not in self.downloads:
                 return False
             return self.downloads[game_name].get("status") in (
-                "na_fila", "baixando", "extraindo", "finalizando", "instalando"
+                "na_fila", "baixando", "pausado", "extraindo", "finalizando", "instalando"
             )
 
-    def remove_download(self, game_name: str):
+    def pause_download(self, game_name: str):
         with self._lock:
-            if game_name == self.current_download:
+            if game_name not in self.downloads:
                 return
 
+            if game_name != self.current_download:
+                return
+
+            status = self.downloads[game_name].get("status")
+            if status != "baixando":
+                return
+
+            self.downloads[game_name]["status"] = "pausado"
+            self.downloads[game_name]["paused"] = True
+            self.downloads[game_name]["speed"] = ""
+            item = dict(self.downloads[game_name])
+
+            signals = self.current_signals
+
+        if signals and hasattr(signals, "pause_event"):
+            signals.pause_event.set()
+
+        self.download_updated.emit(game_name, item)
+
+    def resume_download(self, game_name: str):
+        with self._lock:
+            if game_name not in self.downloads:
+                return
+
+            if game_name != self.current_download:
+                return
+
+            status = self.downloads[game_name].get("status")
+            if status != "pausado":
+                return
+
+            self.downloads[game_name]["status"] = "baixando"
+            self.downloads[game_name]["paused"] = False
+            item = dict(self.downloads[game_name])
+
+            signals = self.current_signals
+
+        if signals and hasattr(signals, "pause_event"):
+            signals.pause_event.clear()
+
+        self.download_updated.emit(game_name, item)
+
+    def cancel_download(self, game_name: str):
+        with self._lock:
+            if game_name not in self.downloads:
+                return
+
+            # se estiver na fila, remove direto
             if game_name in self.queue:
                 self.queue.remove(game_name)
 
+                self.downloads[game_name]["status"] = "cancelado"
+                self.downloads[game_name]["cancelled"] = True
+                self.downloads[game_name]["speed"] = ""
+                self.downloads[game_name]["eta"] = ""
+                item = dict(self.downloads[game_name])
+
+                cleanup_download_files(game_name)
+
+                self.download_updated.emit(game_name, item)
+                self.queue_updated.emit()
+                return
+
+            # se for o download atual, manda sinal de cancelar
+            if game_name == self.current_download:
+                self.downloads[game_name]["status"] = "cancelado"
+                self.downloads[game_name]["cancelled"] = True
+                self.downloads[game_name]["speed"] = ""
+                item = dict(self.downloads[game_name])
+                signals = self.current_signals
+            else:
+                return
+
+        if signals and hasattr(signals, "cancel_event"):
+            signals.cancel_event.set()
+
+        self.download_updated.emit(game_name, item)
+
+    def remove_download(self, game_name: str):
+        should_cleanup = False
+
+        with self._lock:
+            # não remove download ativo baixando/extraindo/finalizando
+            if game_name == self.current_download:
+                status = self.downloads.get(game_name, {}).get("status", "")
+
+                # só permite remover se já foi cancelado
+                if status != "cancelado":
+                    return
+
+            if game_name in self.queue:
+                self.queue.remove(game_name)
+                should_cleanup = True
+
             if game_name in self.downloads:
+                status = self.downloads[game_name].get("status", "")
+                if status in ("cancelado", "erro", "na_fila"):
+                    should_cleanup = True
+
                 del self.downloads[game_name]
+
+        if should_cleanup:
+            cleanup_download_files(game_name)
 
         self.queue_updated.emit()
 
@@ -387,6 +572,9 @@ class DownloadManager(QObject):
             item["status"] = "na_fila"
             item["error"] = ""
             item["progress"] = 0
+            item["speed"] = ""
+            item["paused"] = False
+            item["cancelled"] = False
 
             if game_name not in self.queue:
                 self.queue.append(game_name)

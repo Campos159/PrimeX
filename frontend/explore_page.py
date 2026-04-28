@@ -3,11 +3,14 @@ import os
 import json
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
-    QGridLayout, QSizePolicy, QMessageBox
+    QGridLayout, QSizePolicy, QMessageBox, QDialog, QTextEdit
 )
+from PyQt6.QtCore import Qt, QSize, QRunnable, QThreadPool, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QPainter, QPainterPath
 from PyQt6.QtGui import QFontMetrics
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap, QIcon, QColor, QLinearGradient
+from PyQt6.QtCore import QRectF
+from PyQt6.QtCore import Qt, QSize
 from profile import ProfilePage
 from navbar import NavBar
 from downloader import decrypt_file_to, wait_file_ready
@@ -16,10 +19,11 @@ from PyQt6.QtGui import QFontDatabase
 from api_config import API_BASE
 import hashlib
 import requests
+from PyQt6.QtWidgets import QGraphicsOpacityEffect
+from PyQt6.QtCore import QPropertyAnimation
 from PyQt6.QtWidgets import QScrollArea
 from utils import resource_path
 from session import load_session
-from PyQt6.QtWidgets import QDialog, QTextEdit
 from PyQt6.QtGui import QFont
 from download_manager import download_manager
 import platform
@@ -257,6 +261,48 @@ def load_installed():
 # =========================
 # GAME CARD
 # =========================
+
+class ImageLoaderSignals(QObject):
+    finished = pyqtSignal(str, bytes)
+
+
+class ImageLoaderTask(QRunnable):
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+        self.signals = ImageLoaderSignals()
+
+    def run(self):
+        data = b""
+
+        if not self.url:
+            self.signals.finished.emit(self.url, data)
+            return
+
+        try:
+            base_dir = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+            cache_dir = os.path.join(base_dir, "PrimeX", "cache", "covers")
+            os.makedirs(cache_dir, exist_ok=True)
+
+            h = hashlib.md5(self.url.encode("utf-8")).hexdigest()
+            cache_path = os.path.join(cache_dir, f"{h}.img")
+
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+                with open(cache_path, "rb") as f:
+                    data = f.read()
+            else:
+                r = requests.get(self.url, timeout=8)
+                r.raise_for_status()
+                data = r.content
+
+                with open(cache_path, "wb") as f:
+                    f.write(data)
+
+        except Exception as e:
+            print("Erro ao carregar capa:", e)
+
+        self.signals.finished.emit(self.url, data)
+
 class GameCard(QWidget):
     def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao="", requisitos=None):
 
@@ -317,13 +363,19 @@ class GameCard(QWidget):
         """)
 
         self._original_pixmap = QPixmap()
-        data = self.get_image_data(image_url)
-        if data:
-            self._original_pixmap.loadFromData(data)
 
-        # aplica depois que o layout definir tamanhos
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, self._apply_cover_pixmap)
+        # placeholder leve enquanto a capa carrega
+        self.image_label.setText("CARREGANDO...")
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("""
+        QLabel {
+            border-top-left-radius: 16px;
+            border-top-right-radius: 16px;
+            color: #836FFF;
+            font-size: 18px;
+            background-color: #120f2a;
+        }
+        """)
 
 
 
@@ -1477,6 +1529,117 @@ class GameCard(QWidget):
 
 
 
+class DestaqueWidget(QWidget):
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
+    def __init__(self, width, height, title="", image_data=None, big=False, show_title=True):
+        super().__init__()
+        self.is_new = False
+        self.setFixedSize(width, height)
+        self.title = title
+        self.image = QPixmap()
+        self.big = big
+        self.show_title = show_title
+        self.game_data = {}
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        if image_data:
+            self.image.loadFromData(image_data)
+
+    def set_image(self, data):
+        pix = QPixmap()
+        pix.loadFromData(data)
+        self.image = pix
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        rect = self.rect()
+        radius = 16 if self.big else 14
+
+        # recorte arredondado
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), radius, radius)
+
+        painter.save()
+        painter.setClipPath(path)
+
+        if not self.image.isNull():
+            pm = self.image.scaled(
+                rect.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+            x = max(0, (pm.width() - rect.width()) // 2)
+            y = max(0, (pm.height() - rect.height()) // 2)
+
+            painter.drawPixmap(0, 0, pm.copy(x, y, rect.width(), rect.height()))
+        else:
+            painter.fillRect(rect, QColor("#000000"))
+
+        # overlay só se tiver texto
+        if self.show_title:
+            overlay_top = int(rect.height() * 0.80)
+
+            gradient = QLinearGradient(0, overlay_top, 0, rect.height())
+            gradient.setColorAt(0, QColor(0, 0, 0, 0))
+            gradient.setColorAt(1, QColor(0, 0, 0, 180))
+
+            painter.fillRect(rect, gradient)
+
+        painter.restore()
+
+        # borda por cima
+        pen = painter.pen()
+        pen.setWidth(2)
+        pen.setColor(QColor("#2a245f"))
+        painter.setPen(pen)
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
+
+        if self.show_title and self.title:
+            painter.setPen(QColor("#ffffff"))
+
+            font = painter.font()
+            font.setPointSize(28 if self.big else 18)
+            font.setBold(True)
+            painter.setFont(font)
+
+            painter.drawText(
+                rect.adjusted(20, 0, -20, -20),
+                Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+                self.title.upper()
+            )
+            if self.is_new:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#836FFF"))
+
+                badge_rect = QRectF(10, 10, 180, 36)
+                painter.drawRoundedRect(badge_rect, 10, 10)
+
+                painter.setPen(QColor("#0d0b1f"))
+
+                font = painter.font()
+                font.setPointSize(12 if self.big else 10)
+                font.setBold(True)
+                painter.setFont(font)
+
+                painter.drawText(
+                    badge_rect,
+                    Qt.AlignmentFlag.AlignCenter,
+                    "NOVO NA PRIMEX"
+                )
+
+
+
 
 # =========================
 # MAIN WINDOW
@@ -1493,6 +1656,9 @@ class MainWindow(QWidget):
             }
         """)
         self.user_info = dict(usuario_info or {})
+
+        self._navigating = False
+        self.thread_pool = QThreadPool.globalInstance()
 
         # ✅ mescla sessão persistida por cima
         sess = load_session()
@@ -1516,31 +1682,37 @@ class MainWindow(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         header.addStretch()
 
-        self.main_layout.addLayout(header)
-
-        user_btn = QPushButton(f"👤 {self.user_info.get('nome', 'Usuário')}")
+        user_btn = QPushButton(self.user_info.get("nome", "Usuário"))
         user_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        user_btn.setFixedHeight(46)
         user_btn.setStyleSheet("""
             QPushButton {
-    border: 2px solid #836FFF;
-    border-radius: 15px;
-    color: #b9a9ff;
-    font-size: 18px;
-    padding: 6px 14px;
-}
-QPushButton:hover {
-    background-color: #836FFF;
-    color: #0d0b1f;
-    box-shadow: 0 0 10px #836FFF;
-}
+                border: 2px solid #836FFF;
+                border-radius: 18px;
+                color: #e0d9ff;
+                font-size: 17px;
+                font-weight: bold;
+                padding: 6px 14px 6px 10px;
+                text-align: left;
+                background-color: transparent;
+            }
+            QPushButton:hover {
+                background-color: rgba(131, 111, 255, 0.12);
+            }
         """)
+
+        avatar_pix = self._make_round_avatar(self.user_info.get("avatar_url", ""), 28)
+        if not avatar_pix.isNull():
+            user_btn.setIcon(QIcon(avatar_pix))
+            user_btn.setIconSize(QSize(28, 28))
+
         user_btn.clicked.connect(self.open_profile)
         header.addWidget(user_btn, alignment=Qt.AlignmentFlag.AlignRight)
         self.main_layout.addLayout(header)
 
         # NavBar
         nav_callbacks = {
-            "EXPLORAR": self.refresh_page,
+            "EXPLORAR": self.open_explorar,
             "INSTALADOS": self.open_instalados,
             "DOWNLOADS": self.open_downloads
         }
@@ -1605,15 +1777,24 @@ QPushButton:hover {
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
 
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background: transparent;")
+
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 25)
+        self.scroll_layout.setSpacing(24)
+
         self.grid_widget = QWidget()
         self.grid_widget.setStyleSheet("background: transparent;")
 
         self.grid_layout = QGridLayout(self.grid_widget)
         self.grid_layout.setHorizontalSpacing(20)
-        self.grid_layout.setVerticalSpacing(50)  # seu espaçamento atual
-        self.grid_layout.setContentsMargins(0, 5, 0, 25)  # um respiro embaixo
+        self.grid_layout.setVerticalSpacing(50)
+        self.grid_layout.setContentsMargins(0, 5, 0, 25)
 
-        self.scroll_area.setWidget(self.grid_widget)
+        self.scroll_layout.addWidget(self.grid_widget)
+
+        self.scroll_area.setWidget(self.scroll_content)
         self.main_layout.addWidget(self.scroll_area)
 
         self.setLayout(self.main_layout)
@@ -1625,9 +1806,74 @@ QPushButton:hover {
         self.shortcut_refresh.activated.connect(self.reload_games)
 
         self.cards = []
+
+        self.novos_jogos = []
+        self.destaque_index = 0
+        self.destaque_main = None
+        self.destaque_side_widgets = []
+        self.destaque_timer = QTimer(self)
+        self.destaque_timer.timeout.connect(self.next_destaque)
+
         self.load_games()
         # aplica filtros atuais (mantém layout consistente mesmo sem jogos)
         self.apply_filters()
+
+    def open_explorar(self):
+        # Já estou no Explorar, então não abro outra janela
+        if self._navigating:
+            return
+
+        self.reload_games()
+
+    def animate_fade(self, widget, on_mid=None):
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+
+        fade_out = QPropertyAnimation(effect, b"opacity")
+        fade_out.setDuration(200)
+        fade_out.setStartValue(1)
+        fade_out.setEndValue(0)
+
+        fade_in = QPropertyAnimation(effect, b"opacity")
+        fade_in.setDuration(200)
+        fade_in.setStartValue(0)
+        fade_in.setEndValue(1)
+
+        # 🔥 GUARDA referência (ESSENCIAL)
+        self._anim = (fade_out, fade_in)
+
+        def after_fade_out():
+            if on_mid:
+                on_mid()
+            fade_in.start()
+
+        fade_out.finished.connect(after_fade_out)
+        fade_out.start()
+
+    def load_card_image_async(self, card):
+        if not card.image_url:
+            return
+
+        task = ImageLoaderTask(card.image_url)
+
+        def on_finished(url, data):
+            if not data:
+                return
+
+            if not hasattr(card, "image_label"):
+                return
+
+            pix = QPixmap()
+            pix.loadFromData(data)
+
+            if pix.isNull():
+                return
+
+            card._original_pixmap = pix
+            card._apply_cover_pixmap()
+
+        task.signals.finished.connect(on_finished)
+        self.thread_pool.start(task)
 
     def reload_games(self):
         try:
@@ -1644,27 +1890,423 @@ QPushButton:hover {
             self.refresh_btn.setText("🔄 Atualizar")
             self.refresh_btn.setEnabled(True)
 
+    def _pixmap_from_source(self, source: str, size: int = 36):
+        pixmap = QPixmap()
+
+        if not source:
+            return pixmap
+
+        if source.startswith("http://") or source.startswith("https://"):
+            try:
+                r = requests.get(source, timeout=8)
+                if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
+                    pixmap.loadFromData(r.content)
+            except Exception:
+                return QPixmap()
+        else:
+            pixmap = QPixmap(source)
+
+        if pixmap.isNull():
+            return QPixmap()
+
+        return pixmap.scaled(
+            size, size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+    def _make_round_avatar(self, source: str, size: int = 36):
+        pix = self._pixmap_from_source(source, size)
+
+        if pix.isNull():
+            default_avatar = resource_path("assets/profile_default.png")
+            pix = self._pixmap_from_source(default_avatar, size)
+
+        if pix.isNull():
+            return QPixmap()
+
+        rounded = QPixmap(size, size)
+        rounded.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        path = QPainterPath()
+        path.addEllipse(0, 0, size, size)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pix)
+        painter.end()
+
+        return rounded
+
     def open_downloads(self):
+        if self._navigating:
+            return
+
+        self._navigating = True
+
         from downloads import DownloadsPage
         self.downloads_window = DownloadsPage(usuario_info=self.user_info)
         self.downloads_window.show()
-        self.close()
+        self.hide()
+        QTimer.singleShot(300, self.close)
 
     def open_profile(self):
+        if self._navigating:
+            return
+
+        self._navigating = True
+
         self.profile_window = ProfilePage(user_info=self.user_info)
         self.profile_window.show()
-        self.close()
+        self.hide()
+        QTimer.singleShot(300, self.close)
 
     def refresh_page(self):
-        self.new_window = MainWindow(usuario_info=self.user_info)
-        self.new_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self.reload_games()
 
     def open_instalados(self):
-        from installed import InstaladosPage
-        self.installed_window = InstaladosPage(usuario_info=self.user_info)
-        self.installed_window.show()
-        self.close()
+        if self._navigating:
+            return
+
+        self._navigating = True
+
+        try:
+            if hasattr(self, "nav_bar"):
+                self.nav_bar.setEnabled(False)
+
+            from installed import InstaladosPage
+            self.installed_window = InstaladosPage(usuario_info=self.user_info)
+            self.installed_window.show()
+
+            self.hide()
+            QTimer.singleShot(300, self.close)
+
+        except Exception as e:
+            self._navigating = False
+            if hasattr(self, "nav_bar"):
+                self.nav_bar.setEnabled(True)
+
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir Instalados:\n{e}")
+
+    def _make_destaque_image_label(self, jogo, width, height, big=False):
+        label = QLabel()
+        label.setFixedSize(width, height)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+
+        nome = jogo.get("nome", "Jogo")
+        capa_url = jogo.get("capa_url", "")
+
+        label.setText(nome.upper())
+        label.setStyleSheet(f"""
+            QLabel {{
+                background-color: #120f2a;
+                border-radius: {'16px' if big else '14px'};
+                border: 2px solid #2a245f;
+                color: #ffffff;
+                font-size: {'30px' if big else '20px'};
+                font-weight: bold;
+                padding: {'22px' if big else '14px'};
+            }}
+            QLabel:hover {{
+                border: 2px solid #836FFF;
+                background-color: #18134a;
+            }}
+        """)
+
+        if capa_url:
+            task = ImageLoaderTask(capa_url)
+
+            def on_finished(url, data):
+                if not data:
+                    return
+
+                pix = QPixmap()
+                pix.loadFromData(data)
+
+                if pix.isNull():
+                    return
+
+                pm = pix.scaled(
+                    width,
+                    height,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+
+                x = max(0, (pm.width() - width) // 2)
+                y = max(0, (pm.height() - height) // 2)
+                pm = pm.copy(x, y, width, height)
+
+                # escurece um pouco para o texto aparecer
+                dark = QPixmap(width, height)
+                dark.fill(Qt.GlobalColor.transparent)
+
+                painter = QPainter(dark)
+                painter.drawPixmap(0, 0, pm)
+                painter.fillRect(0, 0, width, height, Qt.GlobalColor.transparent)
+                painter.end()
+
+                label.setPixmap(pm)
+                label.setScaledContents(True)
+
+            task.signals.finished.connect(on_finished)
+            self.thread_pool.start(task)
+
+        return label
+
+    def _load_image_into_destaque(self, widget, url):
+        if not url:
+            return
+
+        task = ImageLoaderTask(url)
+
+        def on_finished(_, data, w=widget):
+            if data:
+                w.set_image(data)
+
+        task.signals.finished.connect(on_finished)
+        self.thread_pool.start(task)
+
+    def update_destaque_content(self):
+        if not self.novos_jogos or not self.destaque_main:
+            return
+
+
+        total = len(self.novos_jogos)
+
+        jogo_principal = self.novos_jogos[self.destaque_index % total]
+        self.destaque_main.title = jogo_principal.get("nome", "")
+        nome_norm = (jogo_principal.get("nome") or "").strip().lower()
+        self.destaque_main.is_new = nome_norm in self.novos_ids
+        self.destaque_main.game_data = jogo_principal
+        self.destaque_main.image = QPixmap()
+        banner = jogo_principal.get("banner_url") or jogo_principal.get("capa_url")
+
+        self._load_image_into_destaque(
+            self.destaque_main,
+            banner
+        )
+        self.destaque_main.update()
+
+        screens = [
+            jogo_principal.get("screenshot_1_url"),
+            jogo_principal.get("screenshot_2_url")
+        ]
+
+        for i, side in enumerate(self.destaque_side_widgets):
+            img_url = screens[i] if i < len(screens) and screens[i] else banner
+
+            side.title = ""
+            side.game_data = jogo_principal
+            side.is_new = nome_norm in getattr(self, "novos_ids", set())
+            side.image = QPixmap()
+
+            self._load_image_into_destaque(side, img_url)
+            side.update()
+
+    def on_destaque_click(self, jogo):
+        if not jogo:
+            return
+
+        nome = jogo.get("nome", "")
+        download = (jogo.get("dropbox_token") or "").strip()
+        descricao = (jogo.get("descricao") or "Sem descrição cadastrada.").strip()
+
+        requisitos = {
+            "min": {
+                "os": jogo.get("min_os"),
+                "cpu": jogo.get("min_cpu"),
+                "ram": jogo.get("min_ram_gb"),
+                "gpu": jogo.get("min_gpu"),
+                "dx": jogo.get("min_directx"),
+                "storage": jogo.get("min_storage_gb"),
+                "notes": jogo.get("min_notes"),
+            },
+            "rec": {
+                "os": jogo.get("rec_os"),
+                "cpu": jogo.get("rec_cpu"),
+                "ram": jogo.get("rec_ram_gb"),
+                "gpu": jogo.get("rec_gpu"),
+                "dx": jogo.get("rec_directx"),
+                "storage": jogo.get("rec_storage_gb"),
+                "notes": jogo.get("rec_notes"),
+            }
+        }
+
+        def format_block(title, data):
+            if not data:
+                return ""
+
+            lines = [f"🎮 {title}:\n"]
+
+            if data.get("os"):
+                lines.append(f"Sistema: {data['os']}")
+            if data.get("cpu"):
+                lines.append(f"CPU: {data['cpu']}")
+            if data.get("ram"):
+                lines.append(f"RAM: {data['ram']} GB")
+            if data.get("gpu"):
+                lines.append(f"GPU: {data['gpu']}")
+            if data.get("dx"):
+                lines.append(f"DirectX: {data['dx']}")
+            if data.get("storage"):
+                lines.append(f"Espaço: {data['storage']} GB")
+            if data.get("notes"):
+                lines.append(f"\nObs: {data['notes']}")
+
+            return "\n".join(lines)
+
+        min_block = format_block("MÍNIMOS", requisitos.get("min"))
+        rec_block = format_block("RECOMENDADOS", requisitos.get("rec"))
+
+        requisitos_texto = f"{min_block}\n\n{rec_block}".strip()
+
+        if not requisitos_texto:
+            requisitos_texto = "Requisitos não informados."
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(nome)
+        dlg.setFixedSize(760, 560)
+        dlg.setStyleSheet("""
+            QDialog {
+                background-color: #0d0b1f;
+                color: #e0d9ff;
+                border-radius: 18px;
+            }
+            QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(14)
+
+        title = QLabel(nome.upper())
+        title.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 34px;
+                font-weight: bold;
+            }
+        """)
+        layout.addWidget(title)
+
+        desc = QTextEdit()
+        desc.setReadOnly(True)
+        desc.setText(f"{descricao}\n\n━━━━━━━━━━━━━━━━━━━━\n\n{requisitos_texto}")
+        desc.setStyleSheet("""
+            QTextEdit {
+                background-color: #120f2a;
+                color: #e0d9ff;
+                border: 2px solid #2a245f;
+                border-radius: 14px;
+                padding: 12px;
+                font-size: 20px;
+            }
+        """)
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        btn_cancelar = QPushButton("CANCELAR")
+        btn_cancelar.setFixedHeight(46)
+        btn_cancelar.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #836FFF;
+                color: #b9a9ff;
+                border-radius: 12px;
+                font-size: 18px;
+                padding: 8px 18px;
+            }
+            QPushButton:hover {
+                background-color: rgba(131,111,255,0.15);
+            }
+        """)
+
+        btn_instalar = QPushButton("INSTALAR")
+        btn_instalar.setFixedHeight(46)
+        btn_instalar.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #836FFF,
+                    stop:1 #4cc3ff
+                );
+                color: #0d0b1f;
+                border-radius: 12px;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 8px 24px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #9a7dff,
+                    stop:1 #6fd4ff
+                );
+            }
+        """)
+
+        btn_cancelar.clicked.connect(dlg.reject)
+        btn_instalar.clicked.connect(dlg.accept)
+
+        btn_row.addWidget(btn_cancelar)
+        btn_row.addWidget(btn_instalar)
+        layout.addLayout(btn_row)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        if not nome or not download:
+            QMessageBox.warning(self, "Erro", "Este jogo não possui link de download cadastrado.")
+            return
+
+        if download_manager.is_downloading(nome):
+            QMessageBox.information(
+                self,
+                "Download em andamento",
+                f"{nome} já está na fila ou em download."
+            )
+            return
+
+        if not user_can_download(self.user_info):
+            QMessageBox.warning(
+                self,
+                "Acesso negado",
+                "Seu plano/token não está ATIVO. Ative seu acesso para baixar jogos."
+            )
+            return
+
+        download_manager.enqueue_download(
+            game_name=nome,
+            download_url=download,
+            image_url=jogo.get("capa_url", ""),
+            genres=jogo.get("genero", [])
+        )
+
+    def next_destaque(self):
+        if not self.novos_jogos:
+            return
+
+        def trocar():
+            self.destaque_index = (self.destaque_index + 1) % len(self.novos_jogos)
+            self.update_destaque_content()
+
+        # anima só UMA vez
+        self.animate_fade(self.destaque_main, on_mid=trocar)
+
+        # anima laterais (sem trocar)
+        for side in self.destaque_side_widgets:
+            self.animate_fade(side)
 
     def load_games(self):
         uid = self.user_info.get("id")
@@ -1679,7 +2321,21 @@ QPushButton:hover {
         try:
             response = requests.get(f"{API_BASE}/admin/listar_jogos", timeout=10)
             response.raise_for_status()
-            jogos_data = response.json().get("jogos", [])
+            todos_jogos = response.json().get("jogos", [])
+
+            novos_jogos = list(reversed(todos_jogos))[:8]
+            self.novos_jogos = novos_jogos
+            self.destaque_index = 0
+
+            self.novos_ids = {
+                (j.get("nome") or "").strip().lower()
+                for j in novos_jogos[:3]
+            }
+
+            jogos_data = sorted(
+                todos_jogos,
+                key=lambda j: (j.get("nome") or "").lower().strip()
+            )
         except Exception as e:
             QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{e}")
             jogos_data = []
@@ -1693,6 +2349,85 @@ QPushButton:hover {
                 w.setParent(None)
 
         self.cards.clear()
+
+        # =========================
+        # REMOVE DESTAQUE ANTIGO
+        # =========================
+        if hasattr(self, "destaque_widget"):
+            self.destaque_timer.stop()
+            self.scroll_layout.removeWidget(self.destaque_widget)
+            self.destaque_widget.deleteLater()
+
+        # =========================
+        # DESTAQUES
+        # =========================
+        if novos_jogos:
+            destaque_widget = QWidget()
+            destaque_layout = QHBoxLayout(destaque_widget)
+            destaque_layout.setSpacing(12)
+            destaque_layout.setContentsMargins(0, 0, 0, 20)
+
+            # ===== JOGO PRINCIPAL =====
+            self.destaque_main = DestaqueWidget(
+                790,
+                340,
+                title="",
+                big=True,
+                show_title=True
+            )
+
+            self.destaque_main.clicked.connect(
+                lambda: self.on_destaque_click(self.destaque_main.game_data)
+            )
+
+            destaque_layout.addWidget(self.destaque_main, stretch=3)
+
+            destaque_layout.addWidget(self.destaque_main, stretch=3)
+
+            # ===== LADO DIREITO =====
+            side_layout = QVBoxLayout()
+            side_layout.setSpacing(10)
+
+            self.destaque_side_widgets = []
+
+            for _ in range(2):
+                side = DestaqueWidget(
+                    290,
+                    160,
+                    title="",
+                    big=False,
+                    show_title=False
+                )
+
+                side.clicked.connect(
+                    lambda w=side: self.on_destaque_click(w.game_data)
+                )
+
+                self.destaque_side_widgets.append(side)
+                side_layout.addWidget(side)
+
+            destaque_layout.addLayout(side_layout, stretch=1)
+
+            wrapper = QHBoxLayout()
+            wrapper.setContentsMargins(0, 0, 0, 0)
+            wrapper.addStretch()
+            wrapper.addWidget(destaque_widget)
+            wrapper.addStretch()
+
+            container = QWidget()
+            container.setLayout(wrapper)
+
+            self.destaque_widget = container
+            destaque_widget.setFixedSize(1100, 360)
+
+            self.scroll_layout.insertWidget(0, container)
+
+            self.update_destaque_content()
+
+            if len(self.novos_jogos) > 1:
+                self.destaque_timer.start(5000)
+            else:
+                self.destaque_timer.stop()
 
         for idx, jogo in enumerate(jogos_data):
             card = GameCard(
@@ -1728,6 +2463,7 @@ QPushButton:hover {
             )
 
             self.cards.append(card)
+            self.load_card_image_async(card)
             row = idx // 5
             col = idx % 5
             self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)

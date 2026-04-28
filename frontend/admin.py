@@ -186,6 +186,7 @@ class AdminPage(QWidget):
         self.menu_buttons = {
             "Adicionar Jogo": QPushButton("Adicionar Jogo"),
             "Gerenciar Jogos": QPushButton("Gerenciar Jogos"),
+            "Gerenciar Avatares": QPushButton("Gerenciar Avatares"),
             "Gerenciar Usuários": QPushButton("Gerenciar Usuários"),
             "Gerenciar Tokens": QPushButton("Gerenciar Tokens"),
             "Estatísticas Gerais": QPushButton("Estatísticas Gerais"),
@@ -227,6 +228,7 @@ class AdminPage(QWidget):
         self.pages = {
             "Adicionar Jogo": self.create_add_game_page(),
             "Gerenciar Jogos": self.create_manage_games_page(),
+            "Gerenciar Avatares": self.create_manage_avatars_page(),
             "Gerenciar Usuários": self.create_manage_users_page(),
             "Gerenciar Tokens": self.create_manage_tokens_page(),
             "Estatísticas Gerais": self.create_placeholder_page("Tela com estatísticas do sistema"),
@@ -676,6 +678,15 @@ class AdminPage(QWidget):
         index = list(self.pages.keys()).index(page_name)
         self.main_area.setCurrentIndex(index)
 
+        if page_name == "Gerenciar Jogos":
+            self.load_games()
+        elif page_name == "Gerenciar Tokens":
+            self.load_tokens()
+        elif page_name == "Gerenciar Usuários":
+            self.load_users()
+        elif page_name == "Gerenciar Avatares":
+            self.load_avatars()
+
     def generate_token(self):
         print("CHAMOU generate_token() ⚠️")
         token_type = self.token_type.currentText()
@@ -820,6 +831,9 @@ class AdminPage(QWidget):
             "descricao": (self.game_desc.toPlainText() or "").strip(),
             "dropbox_token": (self.game_dropbox.text() or "").strip(),
             "capa_url": (self.game_cover.text() or "").strip(),
+            "banner_url": (self.game_banner.text() or "").strip(),
+            "screenshot_1_url": (self.game_screenshot_1.text() or "").strip(),
+            "screenshot_2_url": (self.game_screenshot_2.text() or "").strip(),
 
             "min_os": (self.req_fields["min_os"].text() or "").strip(),
             "min_cpu": (self.req_fields["min_cpu"].text() or "").strip(),
@@ -843,6 +857,9 @@ class AdminPage(QWidget):
         self.game_desc.clear()
         self.game_dropbox.clear()
         self.game_cover.clear()
+        self.game_banner.clear()
+        self.game_screenshot_1.clear()
+        self.game_screenshot_2.clear()
 
         for key, widget in self.req_fields.items():
             if isinstance(widget, QLineEdit):
@@ -908,6 +925,15 @@ class AdminPage(QWidget):
 
         self.game_cover = self._make_line_edit("URL da capa (opcional)")
         layout.addWidget(self.game_cover)
+
+        self.game_banner = self._make_line_edit("URL da imagem grande do destaque / capa do carrossel")
+        layout.addWidget(self.game_banner)
+
+        self.game_screenshot_1 = self._make_line_edit("URL da imagem gameplay 1")
+        layout.addWidget(self.game_screenshot_1)
+
+        self.game_screenshot_2 = self._make_line_edit("URL da imagem gameplay 2")
+        layout.addWidget(self.game_screenshot_2)
 
         layout.addWidget(self._section_title("Requisitos mínimos"))
         min_box, min_fields = self._create_requirements_section("min")
@@ -1164,6 +1190,24 @@ class AdminPage(QWidget):
             capa_input = self._make_line_edit("URL da capa", jogo.get("capa_url", ""))
             layout.addWidget(capa_input)
 
+            banner_input = self._make_line_edit(
+                "URL da imagem grande do destaque / capa do carrossel",
+                jogo.get("banner_url", "")
+            )
+            layout.addWidget(banner_input)
+
+            screenshot_1_input = self._make_line_edit(
+                "URL da imagem gameplay 1",
+                jogo.get("screenshot_1_url", "")
+            )
+            layout.addWidget(screenshot_1_input)
+
+            screenshot_2_input = self._make_line_edit(
+                "URL da imagem gameplay 2",
+                jogo.get("screenshot_2_url", "")
+            )
+            layout.addWidget(screenshot_2_input)
+
             layout.addWidget(self._section_title("Requisitos mínimos"))
             min_box, min_fields = self._create_requirements_section("min", jogo)
             layout.addWidget(min_box)
@@ -1204,6 +1248,9 @@ class AdminPage(QWidget):
                     "descricao": (desc_input.toPlainText() or "").strip(),
                     "dropbox_token": (token_input.text() or "").strip(),
                     "capa_url": (capa_input.text() or "").strip(),
+                    "banner_url": (banner_input.text() or "").strip(),
+                    "screenshot_1_url": (screenshot_1_input.text() or "").strip(),
+                    "screenshot_2_url": (screenshot_2_input.text() or "").strip(),
 
                     "min_os": (fields["min_os"].text() or "").strip(),
                     "min_cpu": (fields["min_cpu"].text() or "").strip(),
@@ -1256,6 +1303,282 @@ class AdminPage(QWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Erro ao abrir edição", str(e))
+
+    def create_manage_avatars_page(self):
+        frame = QFrame()
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Gerenciar Avatares")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #836FFF;")
+        layout.addWidget(title)
+
+        self.avatar_name = self._make_line_edit("Nome do avatar")
+        layout.addWidget(self.avatar_name)
+
+        self.avatar_url = self._make_line_edit("URL da imagem do avatar")
+        layout.addWidget(self.avatar_url)
+
+        self.avatar_status = QComboBox()
+        self.avatar_status.addItems(["Ativo", "Inativo"])
+        self.avatar_status.setStyleSheet("""
+            QComboBox {
+                background-color: #0d0b1f;
+                color: white;
+                border: 2px solid #2a245f;
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 13px;
+            }
+            QComboBox:focus {
+                border: 2px solid #007eff;
+            }
+        """)
+        layout.addWidget(self.avatar_status)
+
+        save_btn = QPushButton("Salvar Avatar")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007eff;
+                color: white;
+                font-size: 14px;
+                padding: 10px 12px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #005bb5;
+            }
+        """)
+        save_btn.clicked.connect(self.save_avatar)
+        layout.addWidget(save_btn)
+
+        self.avatar_list = QVBoxLayout()
+        self.avatar_list.setSpacing(10)
+        layout.addLayout(self.avatar_list)
+
+        refresh_btn = QPushButton("Atualizar Lista de Avatares")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #836FFF;
+                color: white;
+                font-size: 14px;
+                padding: 10px 12px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #6f55ff;
+            }
+        """)
+        refresh_btn.clicked.connect(self.load_avatars)
+        layout.addWidget(refresh_btn)
+
+        layout.addStretch()
+        return frame
+
+    def save_avatar(self):
+        nome = (self.avatar_name.text() or "").strip()
+        image_url = (self.avatar_url.text() or "").strip()
+        is_active = self.avatar_status.currentText() == "Ativo"
+
+        if not nome:
+            QMessageBox.warning(self, "Erro", "Preencha o nome do avatar.")
+            return
+
+        if not image_url:
+            QMessageBox.warning(self, "Erro", "Preencha a URL da imagem.")
+            return
+
+        payload = {
+            "nome": nome,
+            "image_url": image_url,
+            "is_active": is_active
+        }
+
+        try:
+            response = request_api(self, "POST", "/admin/adicionar_avatar", json_body=payload, timeout=20)
+
+            if response.status_code != 200:
+                debug_http_dialog(self, "Erro - adicionar_avatar", response)
+                QMessageBox.warning(self, "Erro", f"Falha ao salvar avatar ({response.status_code})")
+                return
+
+            QMessageBox.information(self, "Sucesso", "Avatar adicionado com sucesso!")
+            self.avatar_name.clear()
+            self.avatar_url.clear()
+            self.avatar_status.setCurrentIndex(0)
+            self.load_avatars()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
+
+    def load_avatars(self):
+        try:
+            response = request_api(self, "GET", "/admin/listar_avatars", timeout=20)
+
+            if response.status_code != 200:
+                debug_http_dialog(self, "Erro - listar_avatars", response)
+                QMessageBox.warning(self, "Erro", f"Falha ao carregar avatares ({response.status_code})")
+                return
+
+            data = safe_json(response) or {}
+            avatars = data.get("avatars", [])
+
+            while self.avatar_list.count():
+                item = self.avatar_list.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+
+            for avatar in avatars:
+                row_widget = QFrame()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(10, 6, 10, 6)
+
+                nome = avatar.get("nome", "")
+                image_url = avatar.get("image_url", "")
+                is_active = avatar.get("is_active", True)
+
+                status_text = "Ativo" if is_active else "Inativo"
+                status_color = "#4CAF50" if is_active else "#F44336"
+
+                label = QLabel(f"[{avatar.get('id')}] {nome}")
+                label.setStyleSheet("color: white; font-size: 14px;")
+                row_layout.addWidget(label)
+
+                row_layout.addStretch()
+
+                status_lbl = QLabel(status_text)
+                status_lbl.setStyleSheet(f"color: {status_color}; font-weight: bold;")
+                row_layout.addWidget(status_lbl)
+
+                btn_edit = QPushButton("Editar")
+                btn_edit.setStyleSheet("background-color: orange; color: white; padding: 5px;")
+                btn_edit.clicked.connect(lambda _, a=avatar: self.edit_avatar(a))
+                row_layout.addWidget(btn_edit)
+
+                btn_delete = QPushButton("Deletar")
+                btn_delete.setStyleSheet("background-color: red; color: white; padding: 5px;")
+                btn_delete.clicked.connect(lambda _, aid=avatar.get("id"): self.delete_avatar(aid))
+                row_layout.addWidget(btn_delete)
+
+                self.avatar_list.addWidget(row_widget)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
+
+
+    def edit_avatar(self, avatar):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Editar Avatar")
+        dialog.resize(500, 260)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #120f2a;
+                color: white;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+
+        nome_input = self._make_line_edit("Nome do avatar", avatar.get("nome", ""))
+        layout.addWidget(nome_input)
+
+        url_input = self._make_line_edit("URL da imagem", avatar.get("image_url", ""))
+        layout.addWidget(url_input)
+
+        status_combo = QComboBox()
+        status_combo.addItems(["Ativo", "Inativo"])
+        status_combo.setCurrentText("Ativo" if avatar.get("is_active", True) else "Inativo")
+        status_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #0d0b1f;
+                color: white;
+                border: 2px solid #2a245f;
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 13px;
+            }
+        """)
+        layout.addWidget(status_combo)
+
+        save_btn = QPushButton("Salvar Alterações")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007eff;
+                color: white;
+                font-size: 14px;
+                padding: 10px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #005bb5;
+            }
+        """)
+        layout.addWidget(save_btn)
+
+        def salvar():
+            payload = {
+                "nome": (nome_input.text() or "").strip(),
+                "image_url": (url_input.text() or "").strip(),
+                "is_active": status_combo.currentText() == "Ativo"
+            }
+
+            if not payload["nome"]:
+                QMessageBox.warning(dialog, "Erro", "Preencha o nome do avatar.")
+                return
+
+            if not payload["image_url"]:
+                QMessageBox.warning(dialog, "Erro", "Preencha a URL da imagem.")
+                return
+
+            try:
+                response = request_api(
+                    self,
+                    "PUT",
+                    f"/admin/editar_avatar/{avatar['id']}",
+                    json_body=payload,
+                    timeout=20
+                )
+
+                if response.status_code != 200:
+                    debug_http_dialog(self, "Erro - editar_avatar", response)
+                    QMessageBox.warning(dialog, "Erro", f"Falha ao editar avatar ({response.status_code})")
+                    return
+
+                QMessageBox.information(self, "Sucesso", "Avatar atualizado com sucesso")
+                dialog.accept()
+                self.load_avatars()
+
+            except Exception as e:
+                QMessageBox.critical(dialog, "Erro", f"Falha ao salvar avatar:\n{e}")
+
+        save_btn.clicked.connect(salvar)
+        dialog.exec()
+
+    def delete_avatar(self, avatar_id):
+        confirm = QMessageBox.question(
+            self,
+            "Confirmar Exclusão",
+            f"Tem certeza que deseja deletar o avatar ID {avatar_id}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            response = request_api(self, "DELETE", f"/admin/deletar_avatar/{avatar_id}", timeout=20)
+
+            if response.status_code != 200:
+                debug_http_dialog(self, "Erro - deletar_avatar", response)
+                QMessageBox.warning(self, "Erro", "Não foi possível deletar o avatar")
+                return
+
+            QMessageBox.information(self, "Sucesso", "Avatar deletado com sucesso")
+            self.load_avatars()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao conectar ao servidor:\n{e}")
 
     def open_explore_page(self):
         try:

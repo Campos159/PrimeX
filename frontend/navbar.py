@@ -13,7 +13,56 @@ class NavButton(QWidget):
     def __init__(self, text, icon="", badge_count=0, callback=None):
         super().__init__()
 
-        self.button = QPushButton(f"{icon}  {text}")
+        self.container = QHBoxLayout(self)
+        self.container.setContentsMargins(0, 0, 0, 0)
+        self.container.setSpacing(8)
+
+        # Avatar (se tiver)
+        if icon and icon.startswith("http"):
+            self.avatar = QLabel()
+            self.avatar.setFixedSize(28, 28)
+
+            pix = QPixmap()
+            try:
+                import httpx
+                r = httpx.get(icon, timeout=5)
+                if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
+                    pix.loadFromData(r.content)
+            except:
+                pass
+
+            if not pix.isNull():
+                pix = pix.scaled(
+                    28, 28,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.avatar.setPixmap(pix)
+
+            self.container.addWidget(self.avatar)
+
+        # Texto
+        self.button = QPushButton(text)
+        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.button.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #e0d9ff;
+                font-size: 18px;
+                font-weight: 600;
+                padding: 6px 6px;
+            }
+            QPushButton:hover {
+                color: #836FFF;
+            }
+        """)
+
+        if callback:
+            self.button.clicked.connect(callback)
+
+        self.container.addWidget(self.button)
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.button.setStyleSheet("""
@@ -48,11 +97,7 @@ class NavButton(QWidget):
             }
         """)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.button)
-        layout.addWidget(self.badge)
+        self.container.addWidget(self.badge)
 
 
 # =========================

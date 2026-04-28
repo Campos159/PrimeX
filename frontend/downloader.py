@@ -12,6 +12,7 @@ from requests.exceptions import ChunkedEncodingError, ConnectionError
 import json
 import time
 from urllib.parse import urlsplit, urlunsplit, quote
+import requests
 
 
 import requests.adapters
@@ -35,10 +36,17 @@ os.makedirs(GAMES_DIR, exist_ok=True)
 # SIGNALS
 # =========================
 class DownloadSignals(QObject):
-    progress = pyqtSignal(int)   # 0..100
+    progress = pyqtSignal(int)
+    speed = pyqtSignal(str)
+    eta = pyqtSignal(str)
     finished = pyqtSignal()
     error = pyqtSignal(str)
-    status = pyqtSignal(str)     # "baixando", "extraindo", "finalizando"
+    status = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.pause_event = threading.Event()
+        self.cancel_event = threading.Event()
 
     # Informações do resultado (preenchidas ao finalizar com sucesso)
     install_dir: str = ""
@@ -266,7 +274,13 @@ def _server_supports_resume(url: str) -> bool:
             allow_redirects=True
         )
         try:
-            return r.status_code == 206
+            content_range = r.headers.get("Content-Range", "")
+            accept_ranges = r.headers.get("Accept-Ranges", "")
+            return (
+                r.status_code == 206
+                or "bytes" in accept_ranges.lower()
+                or content_range.startswith("bytes ")
+            )
         finally:
             r.close()
     except Exception:
@@ -313,9 +327,40 @@ def clear_install_dir(install_dir: str) -> None:
         except Exception:
             pass
 
+def _format_eta(seconds: float) -> str:
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return "calculando..."
+
+    if seconds <= 0:
+        return "menos de 1 min"
+
+    minutes = seconds // 60
+    hours = minutes // 60
+
+    if hours > 0:
+        rem_min = minutes % 60
+        return f"{hours}h {rem_min}min"
+
+    if minutes > 0:
+        return f"{minutes} min"
+
+    return "menos de 1 min"
+
+class DownloadCancelled(Exception):
+    pass
+
 def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals:
     signals = DownloadSignals()
+    signals.pause_event.clear()
+    signals.cancel_event.clear()
     download_url = _normalize_download_url(download_url)
+
+    def _current_games_dir() -> str:
+        path = get_install_root()
+        os.makedirs(path, exist_ok=True)
+        return path
 
     def run():
         max_attempts = 5
@@ -325,11 +370,13 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
             if not safe_name:
                 raise Exception("Nome do jogo inválido.")
 
-            install_dir = os.path.join(GAMES_DIR, safe_name)
+            games_dir = _current_games_dir()
+
+            install_dir = os.path.join(games_dir, safe_name)
             os.makedirs(install_dir, exist_ok=True)
 
             try:
-                os.system(f'attrib +h "{GAMES_DIR}"')
+                os.system(f'attrib +h "{games_dir}"')
             except Exception:
                 pass
 
@@ -338,25 +385,33 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
             except Exception:
                 pass
 
-            temp_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip.part")
-            final_zip = os.path.join(GAMES_DIR, f"{safe_name}.zip")
+            temp_zip = os.path.join(games_dir, f"{safe_name}.zip.part")
+            final_zip = os.path.join(games_dir, f"{safe_name}.zip")
             meta_path = _meta_path_for(temp_zip)
+
+            def cleanup_cancelled_files():
+                time.sleep(0.2)
+
+                _delete_file_silent(temp_zip)
+                _delete_file_silent(final_zip)
+                _delete_file_silent(meta_path)
+
+                try:
+                    if os.path.isdir(install_dir):
+                        shutil.rmtree(install_dir, ignore_errors=True)
+                except Exception:
+                    pass
 
             resume_supported = _server_supports_resume(download_url)
 
-            # se não suporta resume, limpa parcial antigo para evitar confusão
-            if not resume_supported:
-                _delete_file_silent(temp_zip)
-                _delete_file_silent(meta_path)
-
             for attempt in range(1, max_attempts + 1):
                 try:
-                    downloaded_existing = 0
-                    if resume_supported and os.path.exists(temp_zip):
-                        downloaded_existing = os.path.getsize(temp_zip)
-
                     meta = _load_meta(meta_path)
                     total_length_meta = int(meta.get("total_size", 0) or 0)
+
+                    downloaded_existing = 0
+                    if os.path.exists(temp_zip):
+                        downloaded_existing = os.path.getsize(temp_zip)
 
                     headers = {
                         "User-Agent": "Mozilla/5.0",
@@ -369,16 +424,24 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                     signals.status.emit("baixando")
 
                     with session.get(
-                        download_url,
-                        stream=True,
-                        timeout=(30, 3600),
-                        headers=headers,
-                        allow_redirects=True
+                            download_url,
+                            stream=True,
+                            timeout=(30, 3600),
+                            headers=headers,
+                            allow_redirects=True
                     ) as r:
                         r.raise_for_status()
 
                         is_partial = (r.status_code == 206)
                         content_length = int(r.headers.get("content-length") or 0)
+
+                        # Se já existe parcial e o servidor não respondeu como parcial,
+                        # NÃO zerar nem sobrescrever.
+                        if downloaded_existing > 0 and not is_partial:
+                            raise Exception(
+                                "O servidor não aceitou retomar o download.\n\n"
+                                "O progresso parcial foi mantido, mas este link não suportou continuação agora."
+                            )
 
                         if is_partial:
                             total_length = downloaded_existing + content_length
@@ -389,17 +452,7 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                             if total_length_meta > 0:
                                 total_length = total_length_meta
                             else:
-                                raise Exception(
-                                    "Não foi possível verificar o tamanho do arquivo."
-                                )
-
-                        # se pediu range mas servidor ignorou e mandou tudo (200),
-                        # reinicia corretamente o .part
-                        if resume_supported and downloaded_existing > 0 and not is_partial:
-                            # servidor ignorou Range, então vamos recomeçar com segurança
-                            downloaded_existing = 0
-                            write_mode = "wb"
-                            headers.pop("Range", None)
+                                raise Exception("Não foi possível verificar o tamanho do arquivo.")
 
                         required_space = total_length * 2
                         if not has_enough_disk_space(install_dir, required_space):
@@ -422,10 +475,28 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                         last_pct = -1
                         write_mode = "ab" if (resume_supported and downloaded_existing > 0) else "wb"
 
+                        last_speed_time = time.time()
+                        last_speed_bytes = downloaded
+                        speed_text = ""
+
                         with open(temp_zip, write_mode) as f:
                             flush_counter = 0
 
-                            for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1 MB
+                            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                                if signals.cancel_event.is_set():
+                                    signals.status.emit("cancelado")
+                                    raise DownloadCancelled()
+
+                                while signals.pause_event.is_set():
+                                    signals.status.emit("pausado")
+                                    time.sleep(0.3)
+
+                                    if signals.cancel_event.is_set():
+                                        signals.status.emit("cancelado")
+                                        raise DownloadCancelled()
+
+                                signals.status.emit("baixando")
+
                                 if not chunk:
                                     continue
 
@@ -433,7 +504,32 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                                 downloaded += len(chunk)
                                 flush_counter += len(chunk)
 
-                                # faz flush a cada 16 MB, sem fsync agressivo
+                                now = time.time()
+                                elapsed = now - last_speed_time
+
+                                if elapsed >= 1:
+                                    bytes_diff = downloaded - last_speed_bytes
+                                    speed_bps = bytes_diff / elapsed
+
+                                    remaining_bytes = max(0, total_length - downloaded)
+
+                                    if speed_bps > 0:
+                                        eta_seconds = remaining_bytes / speed_bps
+                                        eta_text = _format_eta(eta_seconds)
+                                    else:
+                                        eta_text = "calculando..."
+
+                                    if speed_bps >= 1024 * 1024:
+                                        speed_text = f"{speed_bps / (1024 * 1024):.1f} MB/s"
+                                    else:
+                                        speed_text = f"{speed_bps / 1024:.0f} KB/s"
+
+                                    signals.speed.emit(speed_text)
+                                    signals.eta.emit(eta_text)
+
+                                    last_speed_time = now
+                                    last_speed_bytes = downloaded
+
                                 if flush_counter >= 16 * 1024 * 1024:
                                     f.flush()
                                     flush_counter = 0
@@ -458,18 +554,18 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                         )
 
                     if real_size > total_length:
-                        # situação anormal: arquivo maior que o esperado
                         _delete_file_silent(temp_zip)
                         _delete_file_silent(meta_path)
                         raise Exception(
                             f"Arquivo parcial inválido: esperado {total_length} bytes, mas recebeu {real_size} bytes."
                         )
 
-                    # renomeia .part -> .zip final
                     if os.path.exists(final_zip):
                         _delete_file_silent(final_zip)
                     os.replace(temp_zip, final_zip)
 
+                    signals.speed.emit("")
+                    signals.eta.emit("")
                     signals.status.emit("extraindo")
 
                     if not zipfile.is_zipfile(final_zip):
@@ -492,6 +588,9 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                                 last_extract_pct = extract_pct
                                 signals.progress.emit(extract_pct)
 
+                    signals.speed.emit("")
+                    signals.speed.emit("")
+                    signals.eta.emit("")
                     signals.status.emit("finalizando")
 
                     validate_game_files(install_dir)
@@ -504,9 +603,8 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
 
                     main_exe = find_main_exe(install_dir)
 
-                    if main_exe:
-                        if os.path.getsize(main_exe) < 500 * 1024:
-                            raise Exception("Executável inválido detectado.")
+                    if main_exe and os.path.getsize(main_exe) < 500 * 1024:
+                        raise Exception("Executável inválido detectado.")
 
                     launcher_exe = find_launcher_exe(install_dir)
 
@@ -543,38 +641,15 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                     signals.finished.emit()
                     return
 
-
-                    exe_rel = os.path.relpath(main_exe, install_dir)
-
-                    # 🔥 NOVA LÓGICA
-                    if launcher_exe:
-                        # NÃO criptografa
-                        signals.install_dir = install_dir
-                        signals.exe_relpath = os.path.relpath(launcher_exe, install_dir)
-                        signals.exe_enc_path = ""  # não tem criptografia
-
-                    else:
-                        exe_enc_path = os.path.join(install_dir, exe_rel + ".primexenc")
-
-                        os.makedirs(os.path.dirname(exe_enc_path), exist_ok=True)
-
-                        encrypt_file_to(main_exe, exe_enc_path)
-
-                        try:
-                            os.remove(main_exe)
-                        except Exception:
-                            pass
-
-                        signals.install_dir = install_dir
-                        signals.exe_relpath = exe_rel
-                        signals.exe_enc_path = exe_enc_path
-
-                    signals.progress.emit(100)
-                    signals.finished.emit()
+                except DownloadCancelled:
+                    signals.speed.emit("")
+                    signals.eta.emit("")
+                    cleanup_cancelled_files()
                     return
 
                 except (IncompleteRead, ProtocolError, ChunkedEncodingError, ConnectionError):
                     if attempt < max_attempts:
+                        time.sleep(2)
                         continue
                     raise Exception(
                         "O download foi interrompido antes de terminar.\n\n"
@@ -587,6 +662,7 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
 
                     if "IncompleteRead" in msg or "Connection broken" in msg:
                         if attempt < max_attempts:
+                            time.sleep(2)
                             continue
                         raise Exception(
                             "O download foi interrompido antes de terminar.\n\n"
