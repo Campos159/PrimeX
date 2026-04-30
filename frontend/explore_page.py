@@ -1360,6 +1360,11 @@ class GameCard(QWidget):
         exe_path = os.path.normpath(os.path.join(install_dir, exe_rel))
         exe_dir = os.path.dirname(exe_path)
 
+        try:
+            os.chmod(exe_path, 0o777)
+        except Exception:
+            pass
+
         def _run_exe(real_exe_path: str):
             import subprocess
             import os
@@ -1368,23 +1373,43 @@ class GameCard(QWidget):
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
 
+            exe_dir = os.path.dirname(real_exe_path)
+
+            # remove readonly do exe antes de abrir
+            try:
+                os.chmod(real_exe_path, 0o777)
+            except Exception:
+                pass
+
             try:
                 return subprocess.Popen(
                     [real_exe_path],
-                    cwd=os.path.dirname(real_exe_path),  # ✅ CWD correto
+                    cwd=exe_dir,
                     creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
                     close_fds=True
                 )
 
+            except PermissionError:
+                ctypes.windll.shell32.ShellExecuteW(
+                    None,
+                    "runas",
+                    real_exe_path,
+                    None,
+                    exe_dir,
+                    1
+                )
+                return None
+
             except OSError as e:
-                # ✅ WinError 740 = requer elevação (admin)
-                if getattr(e, "winerror", None) == 740:
+                # WinError 5 = access denied
+                # WinError 740 = requires elevation
+                if getattr(e, "winerror", None) in (5, 740):
                     ctypes.windll.shell32.ShellExecuteW(
                         None,
-                        "runas",  # pede UAC
-                        real_exe_path,  # exe
-                        None,  # argumentos (se tiver, eu ajusto)
-                        os.path.dirname(real_exe_path),  # pasta
+                        "runas",
+                        real_exe_path,
+                        None,
+                        exe_dir,
                         1
                     )
                     return None
@@ -2093,7 +2118,7 @@ class MainWindow(QWidget):
         jogo_principal = self.novos_jogos[self.destaque_index % total]
         self.destaque_main.title = jogo_principal.get("nome", "")
         nome_norm = (jogo_principal.get("nome") or "").strip().lower()
-        self.destaque_main.is_new = nome_norm in self.novos_ids
+        self.destaque_main.is_new = True
         self.destaque_main.game_data = jogo_principal
         self.destaque_main.image = QPixmap()
         banner = jogo_principal.get("banner_url") or jogo_principal.get("capa_url")
@@ -2114,7 +2139,7 @@ class MainWindow(QWidget):
 
             side.title = ""
             side.game_data = jogo_principal
-            side.is_new = nome_norm in getattr(self, "novos_ids", set())
+            side.is_new = True
             side.image = QPixmap()
 
             self._load_image_into_destaque(side, img_url)
@@ -2308,16 +2333,8 @@ class MainWindow(QWidget):
         if not self.novos_jogos:
             return
 
-        def trocar():
-            self.destaque_index = (self.destaque_index + 1) % len(self.novos_jogos)
-            self.update_destaque_content()
-
-        # anima só UMA vez
-        self.animate_fade(self.destaque_main, on_mid=trocar)
-
-        # anima laterais (sem trocar)
-        for side in self.destaque_side_widgets:
-            self.animate_fade(side)
+        self.destaque_index = (self.destaque_index + 1) % len(self.novos_jogos)
+        self.update_destaque_content()
 
     def load_games(self):
         uid = self.user_info.get("id")
@@ -2334,22 +2351,33 @@ class MainWindow(QWidget):
             response.raise_for_status()
             todos_jogos = response.json().get("jogos", [])
 
-            novos_jogos = list(reversed(todos_jogos))[:8]
-            self.novos_jogos = novos_jogos
+            # Carrossel: somente jogos com as 3 imagens preenchidas
+            self.novos_jogos = [
+                j for j in todos_jogos
+                if (j.get("banner_url") or "").strip()
+                   and (j.get("screenshot_1_url") or "").strip()
+                   and (j.get("screenshot_2_url") or "").strip()
+            ]
+
+            self.novos_jogos = list(reversed(self.novos_jogos))[:8]
             self.destaque_index = 0
 
+            # Todos do carrossel devem aparecer como NOVO NA PRIMEX
             self.novos_ids = {
                 (j.get("nome") or "").strip().lower()
-                for j in novos_jogos[:3]
+                for j in self.novos_jogos
             }
 
+            # Catálogo normal: todos os jogos
             jogos_data = sorted(
                 todos_jogos,
                 key=lambda j: (j.get("nome") or "").lower().strip()
             )
+
         except Exception as e:
             QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{e}")
             jogos_data = []
+            self.novos_jogos = []
 
         # limpa grid
         for i in reversed(range(self.grid_layout.count())):
@@ -2361,24 +2389,19 @@ class MainWindow(QWidget):
 
         self.cards.clear()
 
-        # =========================
-        # REMOVE DESTAQUE ANTIGO
-        # =========================
+        # remove destaque antigo
         if hasattr(self, "destaque_widget"):
             self.destaque_timer.stop()
             self.scroll_layout.removeWidget(self.destaque_widget)
             self.destaque_widget.deleteLater()
 
-        # =========================
-        # DESTAQUES
-        # =========================
-        if novos_jogos:
+        # destaques
+        if self.novos_jogos:
             destaque_widget = QWidget()
             destaque_layout = QHBoxLayout(destaque_widget)
             destaque_layout.setSpacing(12)
             destaque_layout.setContentsMargins(0, 0, 0, 20)
 
-            # ===== JOGO PRINCIPAL =====
             self.destaque_main = DestaqueWidget(
                 790,
                 340,
@@ -2393,7 +2416,6 @@ class MainWindow(QWidget):
 
             destaque_layout.addWidget(self.destaque_main, stretch=3)
 
-            # ===== LADO DIREITO =====
             side_layout = QVBoxLayout()
             side_layout.setSpacing(10)
 
@@ -2437,6 +2459,8 @@ class MainWindow(QWidget):
                 self.destaque_timer.start(5000)
             else:
                 self.destaque_timer.stop()
+        else:
+            self.destaque_timer.stop()
 
         for idx, jogo in enumerate(jogos_data):
             requisitos = {
@@ -2475,24 +2499,7 @@ class MainWindow(QWidget):
             self.cards.append(card)
             self.load_card_image_async(card)
 
-            row = idx // 5
-            col = idx % 5
-            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
-
-            self.cards.append(card)
-            self.load_card_image_async(card)
-            row = idx // 5
-            col = idx % 5
-            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
-
-        total_slots = max(5, len(jogos_data))
-        for idx in range(len(jogos_data), total_slots):
-            row = idx // 5
-            col = idx % 5
-            placeholder = QLabel()
-            placeholder.setFixedSize(260, 485)
-            placeholder.setStyleSheet("background-color: transparent; border: none;")
-            self.grid_layout.addWidget(placeholder, row, col)
+        self.apply_filters()
 
     # <<< NOVO: filtros (texto + gêneros) sem quebrar layout
     def apply_filters(self, search_text=None, active_genres=None):

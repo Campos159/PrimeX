@@ -351,7 +351,27 @@ def _format_eta(seconds: float) -> str:
 class DownloadCancelled(Exception):
     pass
 
-def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals:
+def resolve_exe_principal(install_dir: str, exe_principal: str) -> str:
+    exe_principal = (exe_principal or "").strip()
+    if not exe_principal:
+        return ""
+
+    exe_manual = os.path.normpath(exe_principal)
+    exe_manual_path = os.path.normpath(os.path.join(install_dir, exe_manual))
+
+    if os.path.exists(exe_manual_path):
+        return exe_manual_path
+
+    target_name = os.path.basename(exe_manual).lower()
+
+    for root, _, files in os.walk(install_dir):
+        for fn in files:
+            if fn.lower() == target_name:
+                return os.path.join(root, fn)
+
+    return ""
+
+def baixar_jogo(game_name: str, download_url: str, card=None, exe_principal="") -> DownloadSignals:
     signals = DownloadSignals()
     signals.pause_event.clear()
     signals.cancel_event.clear()
@@ -601,10 +621,21 @@ def baixar_jogo(game_name: str, download_url: str, card=None) -> DownloadSignals
                     _delete_file_silent(final_zip)
                     _delete_file_silent(meta_path)
 
-                    main_exe = find_main_exe(install_dir)
+                    # PRIORIDADE: exe_principal do admin
+                    if exe_principal:
+                        main_exe = resolve_exe_principal(install_dir, exe_principal)
 
-                    if main_exe and os.path.getsize(main_exe) < 500 * 1024:
-                        raise Exception("Executável inválido detectado.")
+                        if not main_exe:
+                            raise Exception(
+                                "Executável principal não encontrado.\n\n"
+                                f"Cadastrado no admin:\n{exe_principal}\n\n"
+                                f"Pasta instalada:\n{install_dir}"
+                            )
+                    else:
+                        main_exe = find_main_exe(install_dir)
+
+                        if main_exe and os.path.getsize(main_exe) < 500 * 1024:
+                            raise Exception("Executável inválido detectado.")
 
                     launcher_exe = find_launcher_exe(install_dir)
 

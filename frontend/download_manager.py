@@ -256,7 +256,11 @@ class DownloadManager(QObject):
         self.download_updated.emit(game_name, current_item)
 
         try:
-            signals = baixar_jogo(game_name, current_item["download_url"])
+            signals = baixar_jogo(
+                game_name,
+                current_item["download_url"],
+                exe_principal=current_item.get("exe_principal", "")
+            )
         except Exception as e:
             self._on_error(game_name, f"Erro ao iniciar download: {e}")
             return
@@ -340,14 +344,17 @@ class DownloadManager(QObject):
             self._process_queue()
 
     def _save_finished_install(self, game_name: str, signals):
-        install_dir = os.path.normpath(signals.install_dir or os.path.join(GAMES_DIR, game_name))
-
-        exe_rel = getattr(signals, "exe_relpath", "") or ""
-        exe_enc = getattr(signals, "exe_enc_path", "") or ""
+        install_dir = os.path.normpath(
+            signals.install_dir or os.path.join(GAMES_DIR, game_name)
+        )
 
         current = self.downloads.get(game_name, {})
         exe_principal = (current.get("exe_principal") or "").strip()
 
+        exe_rel = ""
+        exe_enc = ""
+
+        # 1) PRIORIDADE TOTAL: executável definido no admin
         if exe_principal:
             exe_manual = os.path.normpath(exe_principal)
             exe_manual_path = os.path.normpath(os.path.join(install_dir, exe_manual))
@@ -355,24 +362,28 @@ class DownloadManager(QObject):
             if os.path.exists(exe_manual_path):
                 exe_rel = exe_manual
                 exe_enc = ""
+            else:
+                raise Exception(f"Executável principal não encontrado:\n{exe_manual_path}")
 
-        low = exe_rel.lower().replace("\\", "/")
+        # 2) Fallback automático somente se NÃO tiver exe_principal
+        else:
+            exe_rel = getattr(signals, "exe_relpath", "") or ""
+            exe_enc = getattr(signals, "exe_enc_path", "") or ""
 
-        # se o downloader escolheu launcher explícito, respeita
-        launcher_escolhido = low.endswith("launcher.exe") or low.endswith("launcher1.exe")
+            low = exe_rel.lower().replace("\\", "/")
+            launcher_escolhido = low.endswith("launcher.exe") or low.endswith("launcher1.exe")
 
-        if not launcher_escolhido:
-            if not exe_rel or exe_saved_is_suspicious(exe_rel):
-                fixed_exe_rel = find_best_exe_by_folder_name(install_dir)
-                if fixed_exe_rel:
-                    exe_rel = fixed_exe_rel
-                    exe_enc = ""
-
+            if not launcher_escolhido:
+                if not exe_rel or exe_saved_is_suspicious(exe_rel):
+                    fixed_exe_rel = find_best_exe_by_folder_name(install_dir)
+                    if fixed_exe_rel:
+                        exe_rel = fixed_exe_rel
+                        exe_enc = ""
 
         data = load_installed()
         data[game_name] = {
             "install_dir": install_dir,
-            "exe": exe_principal or exe_rel,
+            "exe": exe_rel,
             "exe_enc": exe_enc,
             "capa_url": current.get("image_url", "") or "",
             "genero": current.get("genres", []) or [],
