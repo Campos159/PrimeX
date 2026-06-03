@@ -1,2 +1,5 @@
 # Arquivo de ambiente
 backend/app/.env
+# Chaves da PrimeX
+keys/
+*.pem

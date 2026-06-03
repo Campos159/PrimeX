@@ -1676,6 +1676,73 @@ class DestaqueWidget(QWidget):
 
 
 
+class SkeletonCard(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(260, 485)
+
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #120f2a;
+                border-radius: 16px;
+                border: 2px solid #2a245f;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        image = QLabel()
+        image.setFixedSize(236, 190)
+        image.setStyleSheet("""
+            background-color: #1b1640;
+            border-radius: 14px;
+        """)
+        layout.addWidget(image)
+
+        title = QLabel("CARREGANDO...")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFixedHeight(50)
+        title.setStyleSheet("""
+            color: #836FFF;
+            font-size: 20px;
+            background-color: #181336;
+            border-radius: 10px;
+        """)
+        layout.addWidget(title)
+
+        for _ in range(3):
+            bar = QLabel()
+            bar.setFixedHeight(42)
+            bar.setStyleSheet("""
+                background-color: #1b1640;
+                border-radius: 10px;
+            """)
+            layout.addWidget(bar)
+
+        layout.addStretch()
+
+class LoadGamesSignals(QObject):
+    success = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+
+class LoadGamesTask(QRunnable):
+    def __init__(self):
+        super().__init__()
+        self.signals = LoadGamesSignals()
+
+    def run(self):
+        try:
+            response = requests.get(f"{API_BASE}/admin/listar_jogos", timeout=10)
+            response.raise_for_status()
+            jogos = response.json().get("jogos", [])
+            self.signals.success.emit(jogos)
+
+        except Exception as e:
+            self.signals.error.emit(str(e))
+
 
 # =========================
 # MAIN WINDOW
@@ -1835,7 +1902,7 @@ class MainWindow(QWidget):
 
         self.setLayout(self.main_layout)
         self.setMinimumSize(720, 480)
-        self.showMaximized()
+
 
         # Atalho F5 para recarregar
         self.shortcut_refresh = QShortcut(QKeySequence("F5"), self)
@@ -1850,9 +1917,35 @@ class MainWindow(QWidget):
         self.destaque_timer = QTimer(self)
         self.destaque_timer.timeout.connect(self.next_destaque)
 
-        self.load_games()
-        # aplica filtros atuais (mantém layout consistente mesmo sem jogos)
-        self.apply_filters()
+        self.show_loading_skeleton()
+
+        QTimer.singleShot(150, self.load_games_async)
+
+    def show_loading_skeleton(self):
+        # limpa grid atual
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+        self.cards.clear()
+
+        # remove destaque antigo se existir
+        if hasattr(self, "destaque_widget"):
+            try:
+                self.destaque_timer.stop()
+                self.scroll_layout.removeWidget(self.destaque_widget)
+                self.destaque_widget.deleteLater()
+            except Exception:
+                pass
+
+        # cria cards fake de carregamento
+        for idx in range(10):
+            card = SkeletonCard()
+            row = idx // 5
+            col = idx % 5
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
 
     def open_explorar(self):
         # Já estou no Explorar, então não abro outra janela
@@ -1916,7 +2009,7 @@ class MainWindow(QWidget):
             self.refresh_btn.setText("ATUALIZANDO...")
             self.refresh_btn.setEnabled(False)
 
-            self.load_games()
+            self.load_games_async()
             self.apply_filters()
 
         except Exception as e:
@@ -2336,49 +2429,44 @@ class MainWindow(QWidget):
         self.destaque_index = (self.destaque_index + 1) % len(self.novos_jogos)
         self.update_destaque_content()
 
-    def load_games(self):
-        uid = self.user_info.get("id")
-        if not uid:
-            QMessageBox.warning(
-                self,
-                "Sessão inválida",
-                "Seu login não está carregando o ID do usuário.\nFaça login novamente."
-            )
-            return
+    def load_games_async(self):
+        self.show_loading_skeleton()
 
-        try:
-            response = requests.get(f"{API_BASE}/admin/listar_jogos", timeout=10)
-            response.raise_for_status()
-            todos_jogos = response.json().get("jogos", [])
+        task = LoadGamesTask()
+        task.signals.success.connect(self.on_games_loaded)
+        task.signals.error.connect(self.on_games_error)
 
-            # Carrossel: somente jogos com as 3 imagens preenchidas
-            self.novos_jogos = [
-                j for j in todos_jogos
-                if (j.get("banner_url") or "").strip()
-                   and (j.get("screenshot_1_url") or "").strip()
-                   and (j.get("screenshot_2_url") or "").strip()
-            ]
+        self.thread_pool.start(task)
 
-            self.novos_jogos = list(reversed(self.novos_jogos))[:8]
-            self.destaque_index = 0
+    def on_games_error(self, msg: str):
+        QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{msg}")
+        self.on_games_loaded([])
 
-            # Todos do carrossel devem aparecer como NOVO NA PRIMEX
-            self.novos_ids = {
-                (j.get("nome") or "").strip().lower()
-                for j in self.novos_jogos
-            }
+    def on_games_loaded(self, todos_jogos: list):
+        # Carrossel: somente jogos com as 3 imagens preenchidas
+        self.novos_jogos = [
+            j for j in todos_jogos
+            if (j.get("banner_url") or "").strip()
+               and (j.get("screenshot_1_url") or "").strip()
+               and (j.get("screenshot_2_url") or "").strip()
+        ]
 
-            # Catálogo normal: todos os jogos
-            jogos_data = sorted(
-                todos_jogos,
-                key=lambda j: (j.get("nome") or "").lower().strip()
-            )
+        self.novos_jogos = list(reversed(self.novos_jogos))[:8]
+        self.destaque_index = 0
 
-        except Exception as e:
-            QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{e}")
-            jogos_data = []
-            self.novos_jogos = []
+        self.novos_ids = {
+            (j.get("nome") or "").strip().lower()
+            for j in self.novos_jogos
+        }
 
+        jogos_data = sorted(
+            todos_jogos,
+            key=lambda j: (j.get("nome") or "").lower().strip()
+        )
+
+        self.render_games(jogos_data)
+
+    def render_games(self, jogos_data):
         # limpa grid
         for i in reversed(range(self.grid_layout.count())):
             item = self.grid_layout.itemAt(i)
@@ -2391,9 +2479,12 @@ class MainWindow(QWidget):
 
         # remove destaque antigo
         if hasattr(self, "destaque_widget"):
-            self.destaque_timer.stop()
-            self.scroll_layout.removeWidget(self.destaque_widget)
-            self.destaque_widget.deleteLater()
+            try:
+                self.destaque_timer.stop()
+                self.scroll_layout.removeWidget(self.destaque_widget)
+                self.destaque_widget.deleteLater()
+            except Exception:
+                pass
 
         # destaques
         if self.novos_jogos:
@@ -2462,7 +2553,7 @@ class MainWindow(QWidget):
         else:
             self.destaque_timer.stop()
 
-        for idx, jogo in enumerate(jogos_data):
+        for jogo in jogos_data:
             requisitos = {
                 "min": {
                     "os": jogo.get("min_os"),
@@ -2549,12 +2640,3 @@ class MainWindow(QWidget):
             placeholder.setFixedSize(260, 485)
             placeholder.setStyleSheet("background-color: transparent; border: none;")
             self.grid_layout.addWidget(placeholder, row, col)
-
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    QFontDatabase.addApplicationFont(FONT_PATH)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())

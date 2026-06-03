@@ -1,7 +1,6 @@
 # downloader.py
 import os
 import zipfile
-import requests
 import threading
 import hashlib
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -12,8 +11,7 @@ from requests.exceptions import ChunkedEncodingError, ConnectionError
 import json
 import time
 from urllib.parse import urlsplit, urlunsplit, quote
-import requests
-
+from dependencies_installer import instalar_visual_cpp
 
 import requests.adapters
 
@@ -611,6 +609,14 @@ def baixar_jogo(game_name: str, download_url: str, card=None, exe_principal="") 
                     signals.speed.emit("")
                     signals.speed.emit("")
                     signals.eta.emit("")
+
+                    signals.status.emit("instalando dependências")
+
+                    try:
+                        instalar_visual_cpp()
+                    except Exception as e:
+                        print(f"[PrimeX] Erro ao instalar dependências: {e}")
+
                     signals.status.emit("finalizando")
 
                     validate_game_files(install_dir)

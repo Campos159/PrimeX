@@ -18,6 +18,9 @@ from PyQt6.QtWidgets import QFrame
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QPainter, QPainterPath
 
+from antivirus_helper import add_windows_defender_exclusion, get_primex_path
+from dependencies_installer import instalar_visual_cpp
+
 FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
 
 
@@ -205,6 +208,47 @@ class ProfilePage(QWidget):
         """)
         self.install_path_btn.clicked.connect(self.choose_install_path)
 
+        self.repair_btn = QPushButton("🔧 Reparar Dependências")
+        self.repair_btn.setFixedHeight(38)
+        self.repair_btn.setFixedWidth(280)
+        self.repair_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.repair_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a245f;
+                color: #e0d9ff;
+                border: 1px solid #4cc3ff;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #4cc3ff;
+                color: #0d0b1f;
+            }
+        """)
+
+        self.repair_btn.clicked.connect(self.repair_dependencies)
+
+        self.antivirus_btn = QPushButton("🛡️ Corrigir Antivírus")
+        self.antivirus_btn.setFixedHeight(38)
+        self.antivirus_btn.setFixedWidth(280)
+        self.antivirus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.antivirus_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a245f;
+                color: #e0d9ff;
+                border: 1px solid #00ffaa;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #00ffaa;
+                color: #0d0b1f;
+            }
+        """)
+        self.antivirus_btn.clicked.connect(self.fix_antivirus)
+
         self.avatar_btn = QPushButton("Alterar avatar")
         self.avatar_btn.setFixedHeight(38)
         self.avatar_btn.setFixedWidth(280)
@@ -252,6 +296,8 @@ class ProfilePage(QWidget):
         profile_info_layout.addWidget(self.token_btn)
         profile_info_layout.addWidget(self.install_path_label)
         profile_info_layout.addWidget(self.install_path_btn)
+        profile_info_layout.addWidget(self.repair_btn)
+        profile_info_layout.addWidget(self.antivirus_btn)
         profile_info_layout.addWidget(self.avatar_btn)
         profile_info_layout.addWidget(self.logout_btn)
 
@@ -328,6 +374,34 @@ class ProfilePage(QWidget):
             "expires_at": self.user_info.get("expires_at"),
             "avatar_url": self.user_info.get("avatar_url"),
         })
+
+    def fix_antivirus(self):
+        primex_path = get_primex_path()
+
+        confirm = QMessageBox.question(
+            self,
+            "Corrigir Antivírus",
+            f"A PrimeX irá solicitar permissão de administrador para adicionar esta pasta às exclusões do Windows Defender:\n\n{primex_path}\n\nDeseja continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        ok = add_windows_defender_exclusion()
+
+        if ok:
+            QMessageBox.information(
+                self,
+                "Solicitação enviada",
+                "A solicitação foi enviada ao Windows.\n\nSe apareceu uma janela de administrador, confirme para concluir a correção."
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Erro",
+                "Não foi possível abrir a solicitação de permissão do Windows."
+            )
 
     def _get_avatar_options(self):
         try:
@@ -559,6 +633,49 @@ class ProfilePage(QWidget):
             self._save_avatar(file_name)
             if dialog:
                 dialog.accept()
+
+    def repair_dependencies(self):
+        confirm = QMessageBox.question(
+            self,
+            "Reparar Dependências",
+            "Deseja verificar e reinstalar os componentes necessários para executar os jogos?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.repair_btn.setEnabled(False)
+        self.repair_btn.setText("INSTALANDO...")
+
+        QApplication.processEvents()
+
+        try:
+            ok = instalar_visual_cpp(forcar=True)
+
+            if ok:
+                QMessageBox.information(
+                    self,
+                    "Concluído",
+                    "As dependências foram instaladas com sucesso."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aviso",
+                    "Algumas dependências não puderam ser instaladas."
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erro",
+                f"Falha ao instalar dependências:\n{e}"
+            )
+
+        finally:
+            self.repair_btn.setEnabled(True)
+            self.repair_btn.setText("🔧 Reparar Dependências")
 
     def choose_install_path(self):
         selected_folder = QFileDialog.getExistingDirectory(

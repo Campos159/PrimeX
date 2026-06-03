@@ -19,6 +19,11 @@ from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+import base64
+import json
+
 print("✅ CARREGOU app/main.py")
 
 
@@ -286,6 +291,11 @@ def usuario_tem_plano_ativo(user_id: int, db: Session):
 # ================================
 # CONFIGURAÇÕES DO DROPBOX
 # ================================
+LICENSE_PRIVATE_KEY_PATH = os.getenv(
+    "LICENSE_PRIVATE_KEY_PATH",
+    "keys/primex_private_key.pem"
+)
+
 DROPBOX_FOLDER = "/jogos"
 
 def normalizar_dropbox_path(p: str) -> str:
@@ -642,6 +652,114 @@ durations = {
     "Anual": timedelta(days=365),
     "Permanente": None
 }
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def carregar_chave_privada():
+    with open(LICENSE_PRIVATE_KEY_PATH, "rb") as f:
+        private_key = serialization.load_pem_private_key(
+            f.read(),
+            password=None
+        )
+
+    if not isinstance(private_key, Ed25519PrivateKey):
+        raise RuntimeError("Chave privada inválida para licença offline.")
+
+    return private_key
+
+
+def assinar_licenca(payload: dict) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    private_key = carregar_chave_privada()
+    signature = private_key.sign(raw)
+
+    return base64.urlsafe_b64encode(signature).decode("utf-8")
+
+
+def get_plano_usuario(user_id: int, db: Session):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if not getattr(user, "is_active", True):
+        return {
+            "user_id": user_id,
+            "user_active": False,
+            "plan_active": False,
+            "plan": "Nenhum",
+            "expires_at": None,
+        }
+
+    now = datetime.utcnow()
+
+    tok = (
+        db.query(TokenDB)
+        .filter(
+            TokenDB.user_id == user_id,
+            TokenDB.active == True
+        )
+        .order_by(TokenDB.activated_at.desc())
+        .first()
+    )
+
+    if not tok:
+        return {
+            "user_id": user_id,
+            "user_active": True,
+            "plan_active": False,
+            "plan": "Nenhum",
+            "expires_at": None,
+        }
+
+    plan_active = True
+
+    if tok.expires_at and tok.expires_at <= now:
+        plan_active = False
+
+    return {
+        "user_id": user_id,
+        "user_active": True,
+        "plan_active": plan_active,
+        "plan": tok.type,
+        "expires_at": tok.expires_at.isoformat() if tok.expires_at else None,
+    }
+
+@app.get("/usuario/{user_id}/status")
+def usuario_status(user_id: int, db: Session = Depends(get_db)):
+    return get_plano_usuario(user_id, db)
+
+@app.get("/usuario/{user_id}/offline_license")
+def gerar_licenca_offline(user_id: int, db: Session = Depends(get_db)):
+    status = get_plano_usuario(user_id, db)
+
+    if not status["user_active"]:
+        raise HTTPException(status_code=403, detail="Usuário banido ou inativo")
+
+    if not status["plan_active"]:
+        raise HTTPException(status_code=403, detail="Usuário sem plano ativo")
+
+    now = datetime.utcnow()
+    offline_until = now + timedelta(hours=48)
+
+    payload = {
+        "user_id": user_id,
+        "plan": status["plan"],
+        "plan_active": True,
+        "expires_at": status["expires_at"],
+        "offline_until": offline_until.isoformat(),
+        "issued_at": now.isoformat(),
+    }
+
+    signature = assinar_licenca(payload)
+
+    return {
+        "license": payload,
+        "signature": signature
+    }
 
 @app.get("/admin/listar_tokens")
 def listar_tokens(db: Session = Depends(get_db)):
