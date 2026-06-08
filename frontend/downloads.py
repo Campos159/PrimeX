@@ -219,6 +219,13 @@ class DownloadRow(QFrame):
         else:
             download_manager.pause_download(self.game_name)
 
+    def open_favoritos(self):
+        def create():
+            from favorites import FavoritesPage
+            return FavoritesPage(usuario_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Favoritos")
+
     def cancel_download(self):
         resp = QMessageBox.question(
             self,
@@ -304,7 +311,8 @@ class DownloadsPage(QWidget):
         nav_callbacks = {
             "EXPLORAR": self.open_explore,
             "INSTALADOS": self.open_instalados,
-            "DOWNLOADS": self.reload_page
+            "DOWNLOADS": self.reload_page,
+            "FAVORITOS": self.open_favoritos
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         self.main_layout.addWidget(self.nav_bar)

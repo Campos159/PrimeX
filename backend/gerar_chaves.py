@@ -16,6 +16,6 @@ public_bytes = public_key.public_bytes(
 )
 
 open("backend/keys/primex_private_key.pem", "wb").write(private_bytes)
-open("primex_public_key.pem", "wb").write(public_bytes)
+open("frontend/keys/primex_public_key.pem", "wb").write(public_bytes)
 
 print("Chaves geradas.")

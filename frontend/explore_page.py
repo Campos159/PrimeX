@@ -1,9 +1,11 @@
 import sys
 import os
+from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import QSize
 import json
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
-    QGridLayout, QSizePolicy, QMessageBox, QDialog, QTextEdit
+    QGridLayout, QSizePolicy, QMessageBox, QDialog, QTextEdit, QFrame
 )
 from PyQt6.QtCore import Qt, QSize, QRunnable, QThreadPool, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QPainter, QPainterPath
@@ -32,7 +34,7 @@ import subprocess
 import re
 import psutil
 from PyQt6.QtGui import QShortcut, QKeySequence
-
+from license_manager import validar_acesso_usuario
 
 
 FONT_PATH = resource_path(os.path.join("fonts", "VT323-Regular.ttf"))
@@ -304,7 +306,20 @@ class ImageLoaderTask(QRunnable):
         self.signals.finished.emit(self.url, data)
 
 class GameCard(QWidget):
-    def __init__(self, image_url, title_top, title_bottom, download_url, genres=None, user_info=None, descricao="", requisitos=None, exe_principal=""):
+    def __init__(
+        self,
+        image_url,
+        title_top,
+        title_bottom,
+        download_url,
+        genres=None,
+        user_info=None,
+        descricao="",
+        requisitos=None,
+        exe_principal="",
+        game_id=None,
+        is_favorite=False
+    ):
 
         super().__init__()
 
@@ -324,6 +339,8 @@ class GameCard(QWidget):
         self.genres = genres or []
         self.descricao = descricao
         self.exe_principal = (exe_principal or "").strip()
+        self.game_id = game_id
+        self.is_favorite = bool(is_favorite)
 
         download_manager.download_updated.connect(self._on_global_download_updated)
         download_manager.download_finished.connect(self._on_global_download_finished)
@@ -362,6 +379,14 @@ class GameCard(QWidget):
             border-top-right-radius: 16px;
         }
         """)
+        self.favorite_btn = QPushButton("", self)
+        self.favorite_btn.setIcon(QIcon(resource_path("assets/favorite.svg")))
+        self.favorite_btn.setIconSize(QSize(22, 22))
+        self.favorite_btn.setFixedSize(42, 42)
+        self.favorite_btn.move(260 - 42 - 6, 16)
+        self.favorite_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.favorite_btn.raise_()
+        self.favorite_btn.clicked.connect(self.toggle_favorite)
 
         self._original_pixmap = QPixmap()
 
@@ -377,10 +402,12 @@ class GameCard(QWidget):
             background-color: #120f2a;
         }
         """)
-
-
-
         root.addWidget(self.image_label)
+
+        self.set_favorite_state(self.is_favorite)
+
+        # garante que fique acima da capa
+        self.favorite_btn.raise_()
         # ===== TITLE =====
 
         self.title_label = QLabel(self.game_title.upper())
@@ -511,6 +538,68 @@ class GameCard(QWidget):
     # =========================
     # MÉTODOS AUXILIARES
     # =========================
+    def set_favorite_state(self, value: bool):
+        self.is_favorite = bool(value)
+
+        self.favorite_btn.setText("")
+        self.favorite_btn.setIcon(QIcon(resource_path("assets/favorite.svg")))
+        self.favorite_btn.setIconSize(QSize(22, 22))
+
+        if self.is_favorite:
+            self.favorite_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #836FFF;
+                border: 1px solid #4cc3ff;
+                border-radius: 21px;
+            }
+            QPushButton:hover {
+                background-color: #9a7dff;
+            }
+            """)
+        else:
+            self.favorite_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(13, 11, 31, 0.78);
+                border: 1px solid #836FFF;
+                border-radius: 21px;
+            }
+            QPushButton:hover {
+                background-color: rgba(131,111,255,0.25);
+            }
+            """)
+
+    def toggle_favorite(self):
+        uid = (self.user_info or {}).get("id")
+
+        if not uid or not self.game_id:
+            QMessageBox.warning(self, "Favoritos", "Não foi possível identificar o usuário ou o jogo.")
+            return
+
+        self.favorite_btn.setEnabled(False)
+
+        try:
+            r = requests.post(
+                f"{API_BASE}/favorites/toggle",
+                json={
+                    "user_id": int(uid),
+                    "game_id": int(self.game_id)
+                },
+                timeout=10
+            )
+            r.raise_for_status()
+
+            data = r.json()
+            self.set_favorite_state(bool(data.get("favorited")))
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Favoritos",
+                f"Não foi possível atualizar seus favoritos.\n\n{e}"
+            )
+
+        finally:
+            self.favorite_btn.setEnabled(True)
 
     def _get_pc_specs(self):
         specs = {
@@ -1124,12 +1213,12 @@ class GameCard(QWidget):
             self.play_game()
             return
 
-        # bloqueia se não tiver plano/token ativo
-        if not user_can_download(self.user_info):
+        # valida acesso online ou por licença offline de 48h
+        if not validar_acesso_usuario(uid):
             QMessageBox.warning(
                 self,
                 "Acesso negado",
-                "Seu plano/token não está ATIVO. Ative seu acesso para baixar jogos."
+                "Não foi possível validar seu acesso.\n\nConecte-se à internet ou renove sua licença offline."
             )
             return
 
@@ -1304,8 +1393,14 @@ class GameCard(QWidget):
         import threading
         import os
 
-        if not self._plano_ativo():
-            QMessageBox.warning(self, "Acesso negado", "Seu acesso não está ativo.")
+        uid = (self.user_info or {}).get("id")
+
+        if not validar_acesso_usuario(uid):
+            QMessageBox.warning(
+                self,
+                "Acesso negado",
+                "Não foi possível validar seu acesso.\n\nConecte-se à internet ou renove sua licença offline."
+            )
             return
 
         data = load_installed()
@@ -1744,6 +1839,198 @@ class LoadGamesTask(QRunnable):
             self.signals.error.emit(str(e))
 
 
+class ConnectionErrorDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.action = "close"
+
+        self.setWindowTitle("PrimeX")
+        self.setFixedSize(720, 430)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0d0b1f;
+                border: 2px solid #836FFF;
+                border-radius: 22px;
+                color: #e0d9ff;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
+
+        top = QHBoxLayout()
+        top.setSpacing(18)
+
+        logo = QLabel()
+        logo.setFixedSize(92, 92)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        logo_path = resource_path(os.path.join("logos", "primex_logo.png"))
+        pix = QPixmap(logo_path)
+
+        if not pix.isNull():
+            pix = pix.scaled(
+                90,
+                90,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            logo.setPixmap(pix)
+        else:
+            logo.setText("PX")
+            logo.setStyleSheet("color: #836FFF; font-size: 34px; font-weight: bold;")
+
+        text_box = QVBoxLayout()
+
+        title = QLabel("Não foi possível carregar a lista de jogos")
+        title.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 30px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        subtitle = QLabel(
+            "Verificamos que não há conexão com a internet ou o servidor da PrimeX "
+            "está temporariamente indisponível."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("""
+            QLabel {
+                color: #cfc6ff;
+                font-size: 20px;
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        text_box.addWidget(title)
+        text_box.addWidget(subtitle)
+
+        top.addWidget(logo)
+        top.addLayout(text_box)
+        layout.addLayout(top)
+
+        info_card = QFrame()
+        info_card.setStyleSheet("""
+            QFrame {
+                background-color: rgba(131, 111, 255, 0.08);
+                border: 1px solid #2a245f;
+                border-radius: 18px;
+            }
+        """)
+
+        info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(22, 18, 22, 18)
+        info_layout.setSpacing(8)
+
+        info_title = QLabel("Conexão não detectada")
+        info_title.setStyleSheet("""
+            QLabel {
+                color: #b9a9ff;
+                font-size: 24px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        info_text = QLabel(
+            "Sem conexão, não é possível atualizar o catálogo de jogos.\n"
+            "Verifique sua internet e tente novamente."
+        )
+        info_text.setWordWrap(True)
+        info_text.setStyleSheet("""
+            QLabel {
+                color: #e0d9ff;
+                font-size: 19px;
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        info_layout.addWidget(info_title)
+        info_layout.addWidget(info_text)
+
+        layout.addWidget(info_card)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(14)
+
+        retry_btn = QPushButton("⟳ Tentar novamente")
+        retry_btn.setFixedHeight(50)
+        retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        retry_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #836FFF,
+                    stop:1 #4cc3ff
+                );
+                color: #0d0b1f;
+                border-radius: 14px;
+                font-size: 22px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #9a7dff,
+                    stop:1 #6fd4ff
+                );
+            }
+        """)
+
+        offline_btn = QPushButton("Abrir instalados")
+        offline_btn.setFixedHeight(50)
+        offline_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        offline_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(131,111,255,0.10);
+                color: #b9a9ff;
+                border: 1px solid #836FFF;
+                border-radius: 14px;
+                font-size: 21px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: rgba(131,111,255,0.22);
+                color: #ffffff;
+            }
+        """)
+
+        def retry():
+            self.action = "retry"
+            self.accept()
+
+        def offline():
+            self.action = "offline"
+            self.accept()
+
+        retry_btn.clicked.connect(retry)
+        offline_btn.clicked.connect(offline)
+
+        buttons.addWidget(retry_btn)
+        buttons.addWidget(offline_btn)
+        layout.addLayout(buttons)
+
+        footer = QLabel("Algumas funcionalidades podem ficar indisponíveis sem internet.")
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setStyleSheet("""
+            QLabel {
+                color: #8f82d8;
+                font-size: 17px;
+                background: transparent;
+                border: none;
+            }
+        """)
+        layout.addWidget(footer)
+
 # =========================
 # MAIN WINDOW
 # =========================
@@ -1817,7 +2104,8 @@ class MainWindow(QWidget):
         nav_callbacks = {
             "EXPLORAR": self.open_explorar,
             "INSTALADOS": self.open_instalados,
-            "DOWNLOADS": self.open_downloads
+            "DOWNLOADS": self.open_downloads,
+            "FAVORITOS": self.open_favoritos
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         self.main_layout.addWidget(self.nav_bar)
@@ -1902,6 +2190,7 @@ class MainWindow(QWidget):
 
         self.setLayout(self.main_layout)
         self.setMinimumSize(720, 480)
+        self.showMaximized()
 
 
         # Atalho F5 para recarregar
@@ -1909,6 +2198,7 @@ class MainWindow(QWidget):
         self.shortcut_refresh.activated.connect(self.reload_games)
 
         self.cards = []
+        self.favorite_ids = set()
 
         self.novos_jogos = []
         self.destaque_index = 0
@@ -1946,6 +2236,23 @@ class MainWindow(QWidget):
             row = idx // 5
             col = idx % 5
             self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignmentFlag.AlignTop)
+
+    def open_favoritos(self):
+        if self._navigating:
+            return
+
+        self._navigating = True
+
+        try:
+            from favorites import FavoritesPage
+
+            self.favorites_window = FavoritesPage(usuario_info=self.user_info)
+            self.hide()
+            self.favorites_window.show()
+
+        except Exception as e:
+            self._navigating = False
+            QMessageBox.warning(self, "Não foi possível abrir Favoritos", str(e))
 
     def open_explorar(self):
         # Já estou no Explorar, então não abro outra janela
@@ -2439,8 +2746,16 @@ class MainWindow(QWidget):
         self.thread_pool.start(task)
 
     def on_games_error(self, msg: str):
-        QMessageBox.warning(self, "Erro", f"Falha ao carregar lista de jogos:\n{msg}")
         self.on_games_loaded([])
+
+        dlg = ConnectionErrorDialog(self)
+        dlg.exec()
+
+        if dlg.action == "retry":
+            self.reload_games()
+
+        elif dlg.action == "offline":
+            self.open_instalados()
 
     def on_games_loaded(self, todos_jogos: list):
         # Carrossel: somente jogos com as 3 imagens preenchidas
@@ -2464,7 +2779,31 @@ class MainWindow(QWidget):
             key=lambda j: (j.get("nome") or "").lower().strip()
         )
 
+        self.load_favorites_ids()
         self.render_games(jogos_data)
+
+    def load_favorites_ids(self):
+        uid = (self.user_info or {}).get("id")
+
+        if not uid:
+            self.favorite_ids = set()
+            return
+
+        try:
+            r = requests.get(
+                f"{API_BASE}/favorites/{int(uid)}",
+                timeout=10
+            )
+
+            if r.status_code != 200:
+                self.favorite_ids = set()
+                return
+
+            data = r.json()
+            self.favorite_ids = set(int(x) for x in data.get("favorites", []))
+
+        except Exception:
+            self.favorite_ids = set()
 
     def render_games(self, jogos_data):
         # limpa grid
@@ -2575,6 +2914,8 @@ class MainWindow(QWidget):
                 }
             }
 
+            game_id = jogo.get("id")
+
             card = GameCard(
                 image_url=jogo.get("capa_url", ""),
                 title_top=jogo.get("nome", ""),
@@ -2584,7 +2925,9 @@ class MainWindow(QWidget):
                 user_info=self.user_info,
                 descricao=jogo.get("descricao", ""),
                 requisitos=requisitos,
-                exe_principal=jogo.get("exe_principal", "")
+                exe_principal=jogo.get("exe_principal", ""),
+                game_id=game_id,
+                is_favorite=int(game_id or 0) in self.favorite_ids
             )
 
             self.cards.append(card)

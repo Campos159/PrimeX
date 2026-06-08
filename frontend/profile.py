@@ -96,7 +96,8 @@ class ProfilePage(QWidget):
         nav_callbacks = {
             "EXPLORAR": self.open_explore_page,
             "INSTALADOS": self.open_instalados,
-            "DOWNLOADS": self.open_downloads
+            "DOWNLOADS": self.open_downloads,
+            "FAVORITOS": self.open_favoritos
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         main_layout.addWidget(self.nav_bar)
@@ -323,6 +324,14 @@ class ProfilePage(QWidget):
     # =========================
     # UI helpers
     # =========================
+
+    def open_favoritos(self):
+        def create():
+            from favorites import FavoritesPage
+            return FavoritesPage(usuario_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Favoritos")
+
     def _apply_plan_ui(self):
         plano = self.user_info.get("plan", "Nenhum")
         ativo = bool(self.user_info.get("plan_active"))

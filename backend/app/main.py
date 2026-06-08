@@ -427,9 +427,65 @@ class AvatarUpdate(BaseModel):
     image_url: str
     is_active: bool = True
 
+class FavoriteToggleRequest(BaseModel):
+    user_id: int
+    game_id: int
+
 # ================================
 # ROTAS - JOGOS
 # ================================
+@app.post("/favorites/toggle")
+def toggle_favorite(data: FavoriteToggleRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    game = db.query(models.Game).filter(models.Game.id == data.game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Jogo não encontrado")
+
+    fav = db.query(models.Favorite).filter(
+        models.Favorite.user_id == data.user_id,
+        models.Favorite.game_id == data.game_id
+    ).first()
+
+    if fav:
+        db.delete(fav)
+        db.commit()
+        return {
+            "favorited": False,
+            "message": "Jogo removido dos favoritos"
+        }
+
+    novo = models.Favorite(
+        user_id=data.user_id,
+        game_id=data.game_id
+    )
+
+    db.add(novo)
+    db.commit()
+
+    return {
+        "favorited": True,
+        "message": "Jogo adicionado aos favoritos"
+    }
+
+
+@app.get("/favorites/{user_id}")
+def listar_favoritos(user_id: int, db: Session = Depends(get_db)):
+    favoritos = (
+        db.query(models.Favorite)
+        .filter(models.Favorite.user_id == user_id)
+        .all()
+    )
+
+    ids = [f.game_id for f in favoritos]
+
+    return {
+        "user_id": user_id,
+        "favorites": ids
+    }
+
 @app.post("/admin/adicionar_avatar")
 def adicionar_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
     novo = models.Avatar(

@@ -102,7 +102,8 @@ class InstaladosPage(QWidget):
         nav_callbacks = {
             "EXPLORAR": self.open_explore,
             "INSTALADOS": self.reload_page,
-            "DOWNLOADS": self.open_downloads
+            "DOWNLOADS": self.open_downloads,
+            "FAVORITOS": self.open_favoritos
         }
         self.nav_bar = NavBar(parent=self, callbacks=nav_callbacks)
         self.main_layout.addWidget(self.nav_bar)
@@ -226,6 +227,13 @@ class InstaladosPage(QWidget):
             return MainWindow(usuario_info=self.user_info)
 
         self._safe_open_window(create, "Não foi possível abrir Explorar")
+
+    def open_favoritos(self):
+        def create():
+            from favorites import FavoritesPage
+            return FavoritesPage(usuario_info=self.user_info)
+
+        self._safe_open_window(create, "Não foi possível abrir Favoritos")
 
     def reload_page(self):
         if self._navigating:
@@ -409,7 +417,3 @@ def main():
     QFontDatabase.addApplicationFont(FONT_PATH)
     window = InstaladosPage()
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

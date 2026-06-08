@@ -117,3 +117,11 @@ class Avatar(Base):
     image_url = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    game_id = Column(Integer, ForeignKey("jogos.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
